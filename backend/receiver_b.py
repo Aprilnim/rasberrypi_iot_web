@@ -2,11 +2,13 @@
 """
 树莓派B LoRa 接收端脚本
 接收 CMD,LED,ON/OFF 命令，控制 GPIO18 LED，并返回 ACK
+接收 PING 命令，返回 PONG
 """
 
 import serial
 import time
 import RPi.GPIO as GPIO
+from typing import Tuple
 
 PORT = "/dev/ttyS0"
 BAUDRATE = 9600
@@ -24,7 +26,7 @@ def build_message(payload: str) -> str:
     return f"{payload},{crc}"
 
 
-def verify_crc(message: str) -> tuple[bool, str]:
+def verify_crc(message: str) -> Tuple[bool, str]:
     parts = message.split(",")
     if len(parts) < 2:
         return False, ""
@@ -70,6 +72,15 @@ def main():
                     print(f"CRC ERROR: raw={raw}")
                     continue
 
+                # 处理 PING
+                if payload == "PING":
+                    pong = build_message("PONG")
+                    ser.write((pong + "\n").encode())
+                    ser.flush()
+                    print(f"TX: {pong}")
+                    continue
+
+                # 处理 LED 命令
                 parts = payload.split(",")
                 if len(parts) != 3 or parts[0] != "CMD" or parts[1] != "LED":
                     print(f"INVALID: {payload}")

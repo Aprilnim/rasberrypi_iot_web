@@ -3,6 +3,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import smbus2 as smbus
 import math
+import threading
+import time
 
 # 创建 FastAPI 实例
 app = FastAPI()
@@ -31,11 +33,51 @@ try:
 except Exception as e:
     print(f"[LoRa] Failed to initialize: {e}")
     lora = None
-#    LORA_AVAILABLE = False
 
 
 class LedState(BaseModel):
     on: bool
+
+
+# =========================
+# LoRa 心跳状态
+# =========================
+lora_online = False
+lora_fail_count = 0
+last_pong_time = None
+heartbeat_lock = threading.Lock()
+
+
+def heartbeat_loop():
+    global lora_online, lora_fail_count, last_pong_time
+    while True:
+        time.sleep(3)
+        if lora is None or not lora.available:
+            with heartbeat_lock:
+                lora_online = False
+            continue
+
+        try:
+            ok = lora.ping_once()
+        except Exception as e:
+            print(f"[Heartbeat] Exception: {e}")
+            ok = False
+
+        with heartbeat_lock:
+            if ok:
+                lora_online = True
+                lora_fail_count = 0
+                last_pong_time = time.time()
+            else:
+                lora_fail_count += 1
+                if lora_fail_count >= 3:
+                    lora_online = False
+
+
+# 启动心跳线程
+if lora is not None and lora.available:
+    threading.Thread(target=heartbeat_loop, daemon=True).start()
+    print("[LoRa] Heartbeat thread started")
 
 
 # =========================
@@ -190,3 +232,25 @@ def set_led(state: LedState):
         return {"on": state.on, "available": True}
     else:
         return {"on": lora.get_led_state(), "available": True, "error": result["message"]}
+
+
+# =========================
+# LoRa 心跳状态接口
+# URL: /lora/status
+# =========================
+@app.get("/lora/status")
+def lora_status():
+    with heartbeat_lock:
+        if lora is None or not lora.available:
+            return {
+                "online": False,
+                "fail_count": lora_fail_count,
+                "last_pong_time": last_pong_time,
+                "message": "设备连接失败"
+            }
+        return {
+            "online": lora_online,
+            "fail_count": lora_fail_count,
+            "last_pong_time": last_pong_time,
+            "message": "设备在线" if lora_online else "设备连接失败"
+        }

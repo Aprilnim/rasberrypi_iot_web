@@ -10,6 +10,7 @@ const els = {
     deviceBadge: document.getElementById("device-badge"),
     logList: document.getElementById("log-list"),
     clearLog: document.getElementById("clear-log"),
+    loraStatus: document.getElementById("lora-status"),
 };
 
 function addLog(message, type = "info") {
@@ -27,15 +28,27 @@ function setBackendOnline(online) {
     if (online) {
         els.backendStatus.innerText = "正常";
         els.backendStatus.className = "info-val status-ok";
-        els.deviceStatus.innerText = "设备在线";
-        els.deviceBadge.classList.add("online");
-        els.deviceBadge.classList.remove("offline");
     } else {
         els.backendStatus.innerText = "断开";
         els.backendStatus.className = "info-val status-err";
+    }
+}
+
+function setLoraOnline(online) {
+    if (online) {
+        els.loraStatus.innerText = "设备在线";
+        els.loraStatus.className = "info-val status-ok";
+        els.deviceStatus.innerText = "设备在线";
+        els.deviceBadge.classList.add("online");
+        els.deviceBadge.classList.remove("offline");
+        els.ledSwitch.disabled = false;
+    } else {
+        els.loraStatus.innerText = "设备连接失败";
+        els.loraStatus.className = "info-val status-err";
         els.deviceStatus.innerText = "设备离线";
         els.deviceBadge.classList.add("offline");
         els.deviceBadge.classList.remove("online");
+        els.ledSwitch.disabled = true;
     }
 }
 
@@ -69,7 +82,6 @@ async function updateLed() {
         const data = await response.json();
         if (!data.available) {
             els.ledStatus.innerText = "不可用";
-            els.ledSwitch.disabled = true;
             return;
         }
         els.ledSwitch.checked = data.on;
@@ -101,6 +113,20 @@ async function toggleLed() {
     }
 }
 
+async function updateLoraStatus() {
+    try {
+        const response = await fetch("/api/lora/status");
+        const data = await response.json();
+        setLoraOnline(data.online);
+        if (data.online) {
+            setBackendOnline(true);
+        }
+    } catch (err) {
+        setLoraOnline(false);
+        setBackendOnline(false);
+    }
+}
+
 els.ledSwitch.addEventListener("change", toggleLed);
 els.clearLog.addEventListener("click", () => {
     els.logList.innerHTML = "";
@@ -111,3 +137,5 @@ addLog("系统初始化完成，开始连接设备...", "info");
 updateSensor();
 setInterval(updateSensor, 1000);
 updateLed();
+updateLoraStatus();
+setInterval(updateLoraStatus, 3000);
