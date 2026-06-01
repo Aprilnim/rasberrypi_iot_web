@@ -27,11 +27,11 @@ from lora import LoRaNode
 
 try:
     lora = LoRaNode()
-    LORA_AVAILABLE = lora.available
+    print(f"[LoRa] Available = {lora.available}")
 except Exception as e:
     print(f"[LoRa] Failed to initialize: {e}")
     lora = None
-    LORA_AVAILABLE = False
+#    LORA_AVAILABLE = False
 
 
 class LedState(BaseModel):
@@ -169,7 +169,7 @@ def sensor():
 # =========================
 @app.get("/led")
 def get_led():
-    if not LORA_AVAILABLE or lora is None:
+    if lora is None or not lora.available:
         return {"on": False, "available": False}
     return {"on": lora.get_led_state(), "available": True}
 
