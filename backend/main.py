@@ -180,7 +180,7 @@ def get_led():
 # =========================
 @app.post("/led")
 def set_led(state: LedState):
-    if not LORA_AVAILABLE or lora is None:
+    if lora is None or not lora.available:
         return {"on": False, "available": False, "error": "LoRa not available"}
 
     action = "ON" if state.on else "OFF"
