@@ -3,3 +3,4 @@ uvicorn
 smbus2
 gpiozero
 pyserial
+RPi.GPIO
