@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YL40 监控台</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="page-header">
+            <div class="header-left">
+                <h1>YL-40 传感器监控台</h1>
+                <p class="subtitle">物联网实时数据面板</p>
+            </div>
+            <div class="header-right">
+                <div class="device-badge" id="device-badge">
+                    <span class="badge-dot"></span>
+                    <span id="device-status">检测中...</span>
+                </div>
+            </div>
+        </header>
+
+        <main class="dashboard-grid">
+            <!-- 传感器数据 -->
+            <section class="card">
+                <div class="card-header">
+                    <h2>传感器数据</h2>
+                    <span class="live-badge">LIVE</span>
+                </div>
+                <div class="metrics-grid">
+                    <div class="metric-box">
+                        <div class="metric-icon">🌡</div>
+                        <div class="metric-data">
+                            <span class="metric-value" id="temp">--</span>
+                            <span class="metric-unit">℃</span>
+                        </div>
+                        <div class="metric-label">环境温度</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-icon">☀</div>
+                        <div class="metric-data">
+                            <span class="metric-value" id="light">--</span>
+                            <span class="metric-unit">%</span>
+                        </div>
+                        <div class="metric-label">光照强度</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- LED 控制 -->
+            <section class="card">
+                <div class="card-header">
+                    <h2>LED 控制</h2>
+                </div>
+                <div class="led-panel">
+                    <div class="led-visual">
+                        <div class="led-glow" id="led-glow"></div>
+                        <div class="led-bulb" id="led-bulb"></div>
+                    </div>
+                    <div class="led-info">
+                        <span class="led-state" id="led-status">--</span>
+                        <span class="led-pin">GPIO 18</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="led-switch">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </section>
+
+            <!-- 系统信息 -->
+            <section class="card">
+                <div class="card-header">
+                    <h2>系统信息</h2>
+                </div>
+                <div class="info-list">
+                    <div class="info-row">
+                        <span class="info-key">设备型号</span>
+                        <span class="info-val">YL-40</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-key">后端服务</span>
+                        <span class="info-val" id="backend-status">连接中...</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-key">数据刷新</span>
+                        <span class="info-val">1 秒 / 次</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-key">通信协议</span>
+                        <span class="info-val">I2C + GPIO</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 操作日志 -->
+            <section class="card log-card">
+                <div class="card-header">
+                    <h2>操作日志</h2>
+                    <button class="clear-btn" id="clear-log">清空</button>
+                </div>
+                <div class="log-list" id="log-list"></div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,30 @@
+services:
+
+  backend:
+    build: ./backend
+    container_name: yl40-backend
+
+    devices:
+      - "/dev/i2c-1:/dev/i2c-1"
+
+    privileged: true
+
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:alpine
+
+    container_name: yl40-nginx
+
+    ports:
+      - "80:80"
+
+    volumes:
+      - ./frontend:/usr/share/nginx/html
+
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf
+
+    depends_on:
+      - backend
+
+    restart: unless-stopped

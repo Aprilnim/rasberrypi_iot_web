@@ -1,0 +1,115 @@
+import time
+
+
+class LoRaNode:
+    def __init__(self, port="/dev/ttyS0", baudrate=9600, m0=22, m1=27, timeout=2, retries=3):
+        self.port = port
+        self.baudrate = baudrate
+        self.m0 = m0
+        self.m1 = m1
+        self.timeout = timeout
+        self.retries = retries
+        self.ser = None
+        self._led_state = False
+        self._available = False
+
+        try:
+            import RPi.GPIO as GPIO
+            import serial
+
+            GPIO.setmode(GPIO.BCM)
+            GPIO.setup(self.m0, GPIO.OUT)
+            GPIO.setup(self.m1, GPIO.OUT)
+            GPIO.output(self.m0, GPIO.LOW)
+            GPIO.output(self.m1, GPIO.LOW)
+            time.sleep(1)
+
+            self.ser = serial.Serial(self.port, self.baudrate, timeout=1)
+            self._available = True
+            print("[LoRa] Initialized successfully")
+        except Exception as e:
+            print(f"[LoRa] Initialization failed: {e}")
+            self._available = False
+
+    @property
+    def available(self):
+        return self._available
+
+    @staticmethod
+    def calc_crc(payload: str) -> int:
+        return sum(payload.encode()) % 256
+
+    def build_message(self, payload: str) -> str:
+        crc = self.calc_crc(payload)
+        return f"{payload},{crc}"
+
+    def verify_crc(self, message: str) -> tuple[bool, str]:
+        parts = message.split(",")
+        if len(parts) < 2:
+            return False, ""
+        received_crc = parts[-1]
+        payload = ",".join(parts[:-1])
+        try:
+            calculated_crc = self.calc_crc(payload)
+            if str(calculated_crc) == received_crc:
+                return True, payload
+            return False, ""
+        except Exception:
+            return False, ""
+
+    def send_command(self, action: str) -> dict:
+        if not self._available:
+            return {"success": False, "message": "LoRa not available"}
+
+        payload = f"CMD,LED,{action}"
+        message = self.build_message(payload)
+        expected_ack_payload = f"ACK,LED,{action}"
+
+        for attempt in range(1, self.retries + 1):
+            print(f"TX: {message} (attempt {attempt}/{self.retries})")
+            try:
+                self.ser.write((message + "\n").encode())
+                self.ser.flush()
+            except Exception as e:
+                print(f"TX ERROR: {e}")
+                continue
+
+            start = time.time()
+            while time.time() - start < self.timeout:
+                try:
+                    if self.ser.in_waiting > 0:
+                        raw = self.ser.readline().decode().strip()
+                        if not raw:
+                            continue
+
+                        print(f"RX: {raw}")
+
+                        ok, recv_payload = self.verify_crc(raw)
+                        if not ok:
+                            print(f"CRC ERROR: raw={raw}")
+                            continue
+
+                        if recv_payload == expected_ack_payload:
+                            self._led_state = (action == "ON")
+                            print(f"ACK OK: {recv_payload}")
+                            return {"success": True, "message": f"ACK: {recv_payload}"}
+                        else:
+                            print(f"ACK MISMATCH: expected={expected_ack_payload}, got={recv_payload}")
+                            continue
+                except Exception as e:
+                    print(f"RX ERROR: {e}")
+                    continue
+
+            print(f"TIMEOUT: No ACK received (attempt {attempt}/{self.retries})")
+
+        return {"success": False, "message": f"Timeout after {self.retries} retries, no valid ACK"}
+
+    def get_led_state(self) -> bool:
+        return self._led_state
+
+    def close(self):
+        if self.ser:
+            try:
+                self.ser.close()
+            except Exception:
+                pass
