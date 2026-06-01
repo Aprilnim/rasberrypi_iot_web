@@ -6,6 +6,7 @@ services:
 
     devices:
       - "/dev/i2c-1:/dev/i2c-1"
+      - "/dev/ttyS0:/dev/ttyS0"
 
     privileged: true
 
