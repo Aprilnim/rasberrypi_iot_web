@@ -246,6 +246,116 @@ def get_temp(v):
 
 
 # ============================================================
+# 传感器缓存
+# ============================================================
+# 目的：
+#   多个浏览器同时刷新 /sensor 时，不让每个 HTTP 请求都直接读 I2C。
+#   后台线程每 1 秒读一次 PCF8591，把最新结果放进内存缓存；
+#   API 请求只读缓存，响应更快，也减轻 I2C 总线压力。
+# ------------------------------------------------------------
+# 后台采样间隔。前端默认每 1 秒请求一次 /sensor，
+# 所以这里也设为 1 秒，保证数据刷新频率和页面显示频率一致。
+SENSOR_CACHE_INTERVAL = 1.0
+
+# sensor_cache 会被后台采样线程写入，也会被多个 HTTP 请求读取。
+# 用锁保证读写时拿到的是一份完整数据，避免并发读到半更新状态。
+sensor_cache_lock = threading.Lock()
+
+# 传感器缓存的唯一数据源。
+# temperature/light_percent 是前端直接展示的换算值；
+# temp_raw/light_raw 保留 ADC 原始值，方便调试硬件；
+# updated_at/age_ms 用来判断缓存新不新；
+# error 用来记录最近一次采样是否失败。
+sensor_cache = {
+    "temperature": 0,
+    "light_percent": 0,
+    "temp_raw": None,
+    "light_raw": None,
+    "updated_at": None,
+    "error": "Sensor cache warming up",
+}
+
+
+def read_sensor_values():
+    # 只有这个函数直接读取 I2C。HTTP 接口不要再直接调用 get_adc()，
+    # 否则多人并发访问时仍然会把压力打到 I2C 总线上。
+    light_raw = get_adc(0x40)
+    temp_raw = get_adc(0x42)
+
+    # 任意一个通道读取失败，都把错误写入缓存；
+    # API 仍然返回结构化数据，避免前端因为异常响应中断刷新。
+    error = None
+    if light_raw is None or temp_raw is None:
+        error = "I2C sensor read failed"
+
+    # 光照换算沿用原来的逻辑：raw 越小代表越亮。
+    # 如果本次 light_raw 读取失败，先按 0 计算，error 字段会告诉调用方这次采样异常。
+    safe_light_raw = 0 if light_raw is None else light_raw
+    return {
+        "temperature": get_temp(temp_raw),
+        "light_percent": round(((255.0 - safe_light_raw) / 255.0) * 100.0, 1),
+        "temp_raw": temp_raw,
+        "light_raw": light_raw,
+        "updated_at": time.time(),
+        "error": error,
+    }
+
+
+def update_sensor_cache_once():
+    # 单次采样并原子更新缓存。
+    # 先在锁外读 I2C，避免慢速硬件 I/O 长时间占住锁；
+    # 读完后只在很短的 update 阶段加锁。
+    values = read_sensor_values()
+    with sensor_cache_lock:
+        sensor_cache.update(values)
+
+
+def sensor_cache_loop():
+    # 后台常驻采样线程。它是整个 sensor_cache 的写入者，
+    # 多个 API 请求只是读取缓存，因此并发量上来时也不会增加 I2C 读取次数。
+    while True:
+        try:
+            update_sensor_cache_once()
+        except Exception as e:
+            # 防御性保护：采样异常不能让后台线程退出。
+            # 保留旧缓存值，只更新 error，前端/调用方可以继续拿到上一份数据。
+            with sensor_cache_lock:
+                sensor_cache["error"] = str(e)
+        time.sleep(SENSOR_CACHE_INTERVAL)
+
+
+def get_sensor_cache_snapshot():
+    # 给 HTTP 接口使用的缓存快照。
+    # 返回 dict 副本，避免接口组装响应时后台线程同时改原始缓存。
+    with sensor_cache_lock:
+        data = dict(sensor_cache)
+
+    # age_ms 表示缓存距当前时间多少毫秒。
+    # 后续如果需要判断“数据过旧”，可以直接用这个字段。
+    updated_at = data.get("updated_at")
+    age_ms = None
+    if updated_at is not None:
+        age_ms = int((time.time() - updated_at) * 1000)
+
+    data["cached"] = True
+    data["age_ms"] = age_ms
+    return data
+
+
+try:
+    # 服务启动时先同步采样一次，尽量避免第一次 /sensor 请求拿到空缓存。
+    update_sensor_cache_once()
+except Exception as e:
+    with sensor_cache_lock:
+        sensor_cache["error"] = str(e)
+
+# 启动后台传感器采样线程。
+# daemon=True 表示主进程退出时线程自动结束，不阻塞容器关闭。
+threading.Thread(target=sensor_cache_loop, daemon=True).start()
+print("[Sensor] Cache thread started")
+
+
+# ============================================================
 # HTTP API 接口定义
 # nginx 配置把 /api/ 开头的请求代理到后端根路径
 # 所以 FastAPI 里注册 /sensor，前端请求 /api/sensor
@@ -271,16 +381,21 @@ def root():
 # 返回：{ "temperature": 25.67, "raw": 128 }
 #   temperature: 换算后的摄氏度
 #   raw:         ADC 原始值（0~255）
+# 现在从 sensor_cache 读取，不再在请求过程中直接访问 I2C。
+# 额外返回 cached/updated_at/age_ms/error，便于调试缓存状态。
 # ------------------------------------------------------------
 @app.get("/temp")
 def temp():
-
-    # CH2 热敏电阻
-    raw = get_adc(0x42)
+    # 读取缓存快照，避免高并发请求重复读硬件。
+    data = get_sensor_cache_snapshot()
 
     return {
-        "temperature": get_temp(raw),
-        "raw": raw
+        "temperature": data["temperature"],
+        "raw": data["temp_raw"],
+        "cached": True,
+        "updated_at": data["updated_at"],
+        "age_ms": data["age_ms"],
+        "error": data["error"],
     }
 
 
@@ -291,25 +406,21 @@ def temp():
 # 返回：{ "light_percent": 78.5, "raw": 55 }
 #   light_percent: 光照百分比（ADC 值越低光照越强，所以用 255-raw）
 #   raw:           ADC 原始值
+# 现在从 sensor_cache 读取，不再在请求过程中直接访问 I2C。
+# 额外返回 cached/updated_at/age_ms/error，便于调试缓存状态。
 # ------------------------------------------------------------
 @app.get("/light")
 def light():
-
-    # CH0 光敏电阻
-    raw = get_adc(0x40)
-
-    if raw is None:
-        raw = 0
-
-    # 转换为百分比（0=最亮，100=最暗）
-    percent = round(
-        ((255.0 - raw) / 255.0) * 100.0,
-        1
-    )
+    # 读取缓存快照，避免高并发请求重复读硬件。
+    data = get_sensor_cache_snapshot()
 
     return {
-        "light_percent": percent,
-        "raw": raw
+        "light_percent": data["light_percent"],
+        "raw": data["light_raw"],
+        "cached": True,
+        "updated_at": data["updated_at"],
+        "age_ms": data["age_ms"],
+        "error": data["error"],
     }
 
 
@@ -318,25 +429,21 @@ def light():
 # 综合传感器接口，一次请求同时返回温度和光照
 # 前端 dashboard 用这个接口，每秒刷新一次
 # 返回：{ "temperature": 25.67, "light_percent": 78.5 }
+# 这是并发访问最多的接口，所以优先改成读 sensor_cache。
+# 保留原字段，保证前端 app.js 不需要跟着改。
 # ------------------------------------------------------------
 @app.get("/sensor")
 def sensor():
-
-    # 读取光照
-    light_raw = get_adc(0x40)
-
-    # 读取温度
-    temp_raw = get_adc(0x42)
-
-    if light_raw is None:
-        light_raw = 0
+    # 读取缓存快照，避免多人同时刷新页面时反复读 I2C。
+    data = get_sensor_cache_snapshot()
 
     return {
-        "temperature": get_temp(temp_raw),
-        "light_percent": round(
-            ((255.0 - light_raw) / 255.0) * 100.0,
-            1
-        )
+        "temperature": data["temperature"],
+        "light_percent": data["light_percent"],
+        "cached": True,
+        "updated_at": data["updated_at"],
+        "age_ms": data["age_ms"],
+        "error": data["error"],
     }
 
 
