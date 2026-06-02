@@ -12,6 +12,7 @@ class LoRaNode:
         self.retries = retries
         self.ser = None
         self._led_state = False
+        self._fan_state = False
         self._available = False
         self._lock = threading.Lock()
 
@@ -59,13 +60,20 @@ class LoRaNode:
         except Exception:
             return False, ""
 
-    def send_command(self, action: str) -> dict:
+    def send_device_command(self, device: str, action: str) -> dict:
+        """通用设备命令发送：支持 LED、FAN 等任意设备类型
+
+        device: 设备名，如 "LED" / "FAN"
+        action: "ON" / "OFF"
+        发送格式：CMD,<DEVICE>,<ACTION>,<CRC>
+        等待 ACK：ACK,<DEVICE>,<ACTION>,<CRC>
+        """
         if not self._available:
             return {"success": False, "message": "LoRa not available"}
 
-        payload = f"CMD,LED,{action}"
+        payload = f"CMD,{device},{action}"
         message = self.build_message(payload)
-        expected_ack_payload = f"ACK,LED,{action}"
+        expected_ack_payload = f"ACK,{device},{action}"
 
         for attempt in range(1, self.retries + 1):
             print(f"TX: {message} (attempt {attempt}/{self.retries})")
@@ -94,7 +102,12 @@ class LoRaNode:
                                 continue
 
                             if recv_payload == expected_ack_payload:
-                                self._led_state = (action == "ON")
+                                # 更新对应设备状态
+                                is_on = (action == "ON")
+                                if device == "LED":
+                                    self._led_state = is_on
+                                elif device == "FAN":
+                                    self._fan_state = is_on
                                 print(f"ACK OK: {recv_payload}")
                                 return {"success": True, "message": f"ACK: {recv_payload}"}
                             else:
@@ -107,6 +120,14 @@ class LoRaNode:
             print(f"TIMEOUT: No ACK received (attempt {attempt}/{self.retries})")
 
         return {"success": False, "message": f"Timeout after {self.retries} retries, no valid ACK"}
+
+    def send_command(self, action: str) -> dict:
+        """兼容旧接口：发送 LED 控制命令"""
+        return self.send_device_command("LED", action)
+
+    def send_fan_command(self, action: str) -> dict:
+        """发送风扇控制命令"""
+        return self.send_device_command("FAN", action)
 
     def ping_once(self) -> bool:
         if not self._available:
@@ -143,7 +164,7 @@ class LoRaNode:
                         if recv_payload == expected:
                             print(f"PONG OK: {recv_payload}")
                             return True
-                        # 非 PONG 消息跳过（可能是 LED ACK 等）
+                        # 非 PONG 消息跳过（可能是 LED/FAN ACK 等）
                         continue
                 except Exception as e:
                     print(f"RX ERROR (PING): {e}")
@@ -154,6 +175,9 @@ class LoRaNode:
 
     def get_led_state(self) -> bool:
         return self._led_state
+
+    def get_fan_state(self) -> bool:
+        return self._fan_state
 
     def close(self):
         if self.ser:

@@ -1,12 +1,10 @@
- 
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YL40 监控台</title>
-    🦝 浣熊
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🦝</text></svg>">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -67,6 +65,27 @@
                     </div>
                     <label class="switch">
                         <input type="checkbox" id="led-switch">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+            </section>
+
+            <!-- 风扇控制 -->
+            <section class="card">
+                <div class="card-header">
+                    <h2>风扇控制</h2>
+                </div>
+                <div class="led-panel fan-panel">
+                    <div class="led-visual">
+                        <div class="fan-glow" id="fan-glow"></div>
+                        <div class="fan-icon" id="fan-bulb">🌀</div>
+                    </div>
+                    <div class="led-info">
+                        <span class="led-state" id="fan-status">--</span>
+                        <span class="led-pin">GPIO 17 继电器</span>
+                    </div>
+                    <label class="switch">
+                        <input type="checkbox" id="fan-switch">
                         <span class="slider"></span>
                     </label>
                 </div>

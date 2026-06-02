@@ -250,6 +250,65 @@ body {
     margin-top: 2px;
 }
 
+/* ========== Fan Panel ========== */
+/* 风扇控制卡片复用 .led-panel 的布局 */
+.fan-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 18px;
+    padding: 10px 0;
+}
+
+/* 风扇图标（用 emoji 🌀 代替灯泡） */
+.fan-icon {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: #334155;
+    border: 2px solid #475569;
+    font-size: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.4s ease;
+    z-index: 2;
+    user-select: none;
+}
+
+/* 风扇开启状态：绿色 + 光晕 */
+.fan-icon.on {
+    background: #10b981;
+    border-color: #34d399;
+    box-shadow: 0 0 20px #10b981, 0 0 40px rgba(16, 185, 129, 0.35);
+    animation: fanSpin 0.6s linear infinite;
+}
+
+/* 风扇旋转动画 */
+@keyframes fanSpin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+/* 风扇光晕（和 led-glow 类似，绿色主题） */
+.fan-glow {
+    position: absolute;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: transparent;
+    transition: all 0.4s ease;
+    z-index: 1;
+}
+
+.fan-glow.on {
+    width: 72px;
+    height: 72px;
+    background: rgba(16, 185, 129, 0.12);
+    filter: blur(14px);
+}
+
 /* ========== Switch ========== */
 .switch {
     position: relative;
