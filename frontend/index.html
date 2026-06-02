@@ -23,13 +23,13 @@
         </header>
 
         <main class="dashboard-grid">
-            <!-- 传感器数据 -->
-            <section class="card">
+            <!-- 第一行：传感器(2列) + LED(1列) + 风扇(1列) -->
+            <section class="card card-col-2">
                 <div class="card-header">
                     <h2>传感器数据</h2>
                     <span class="live-badge">LIVE</span>
                 </div>
-                <div class="metrics-grid">
+                <div class="metrics-grid metrics-large">
                     <div class="metric-box">
                         <div class="metric-icon">🌡</div>
                         <div class="metric-data">
@@ -49,19 +49,23 @@
                 </div>
             </section>
 
-            <!-- LED 控制 -->
             <section class="card">
                 <div class="card-header">
                     <h2>LED 控制</h2>
                 </div>
-                <div class="led-panel">
-                    <div class="led-visual">
+                <div class="control-panel">
+                    <div class="control-visual">
                         <div class="led-glow" id="led-glow"></div>
                         <div class="led-bulb" id="led-bulb"></div>
                     </div>
-                    <div class="led-info">
-                        <span class="led-state" id="led-status">--</span>
-                        <span class="led-pin">GPIO 18</span>
+                    <div class="control-info">
+                        <div class="control-state-row">
+                            <span class="control-state" id="led-status">--</span>
+                            <span class="control-pin">GPIO 18</span>
+                        </div>
+                        <div class="control-meta">
+                            最近操作：<span id="led-last-time">--</span>
+                        </div>
                     </div>
                     <label class="switch">
                         <input type="checkbox" id="led-switch">
@@ -70,19 +74,23 @@
                 </div>
             </section>
 
-            <!-- 风扇控制 -->
             <section class="card">
                 <div class="card-header">
                     <h2>风扇控制</h2>
                 </div>
-                <div class="led-panel fan-panel">
-                    <div class="led-visual">
+                <div class="control-panel">
+                    <div class="control-visual">
                         <div class="fan-glow" id="fan-glow"></div>
                         <div class="fan-icon" id="fan-bulb">🌀</div>
                     </div>
-                    <div class="led-info">
-                        <span class="led-state" id="fan-status">--</span>
-                        <span class="led-pin">GPIO 17 继电器</span>
+                    <div class="control-info">
+                        <div class="control-state-row">
+                            <span class="control-state" id="fan-status">--</span>
+                            <span class="control-pin">GPIO 17</span>
+                        </div>
+                        <div class="control-meta">
+                            最近操作：<span id="fan-last-time">--</span>
+                        </div>
                     </div>
                     <label class="switch">
                         <input type="checkbox" id="fan-switch">
@@ -91,7 +99,7 @@
                 </div>
             </section>
 
-            <!-- 系统信息 -->
+            <!-- 第二行：系统信息(1列) + 通信状态(1列) + 设备概览(2列) -->
             <section class="card">
                 <div class="card-header">
                     <h2>系统信息</h2>
@@ -102,16 +110,36 @@
                         <span class="info-val">YL-40</span>
                     </div>
                     <div class="info-row">
-                        <span class="info-key">后端服务</span>
-                        <span class="info-val" id="backend-status">连接中...</span>
+                        <span class="info-key">传感器</span>
+                        <span class="info-val">PCF8591</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-key">主控</span>
+                        <span class="info-val">Raspberry Pi</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-key">固件版本</span>
+                        <span class="info-val">v1.2.0</span>
+                    </div>
+                </div>
+            </section>
+
+            <section class="card">
+                <div class="card-header">
+                    <h2>通信状态</h2>
+                </div>
+                <div class="info-list">
+                    <div class="info-row">
+                        <span class="info-key">LoRa 连接</span>
+                        <span class="info-val" id="lora-status">检测中...</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-key">心跳间隔</span>
+                        <span class="info-val">3 秒 / 次</span>
                     </div>
                     <div class="info-row">
                         <span class="info-key">数据刷新</span>
                         <span class="info-val">1 秒 / 次</span>
-                    </div>
-                    <div class="info-row">
-                        <span class="info-key">LoRa连接状态</span>
-                        <span class="info-val" id="lora-status">检测中...</span>
                     </div>
                     <div class="info-row">
                         <span class="info-key">通信协议</span>
@@ -120,7 +148,31 @@
                 </div>
             </section>
 
-            <!-- 操作日志 -->
+            <section class="card card-col-2">
+                <div class="card-header">
+                    <h2>设备概览</h2>
+                </div>
+                <div class="overview-grid">
+                    <div class="overview-item">
+                        <span class="overview-label">后端服务</span>
+                        <span class="overview-value" id="backend-status">连接中...</span>
+                    </div>
+                    <div class="overview-item">
+                        <span class="overview-label">设备状态</span>
+                        <span class="overview-value" id="overview-device-status">检测中...</span>
+                    </div>
+                    <div class="overview-item">
+                        <span class="overview-label">最近更新</span>
+                        <span class="overview-value" id="last-update-time">--</span>
+                    </div>
+                    <div class="overview-item">
+                        <span class="overview-label">系统运行</span>
+                        <span class="overview-value" id="uptime">--</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 第三行：日志占满整行 -->
             <section class="card log-card">
                 <div class="card-header">
                     <h2>操作日志</h2>

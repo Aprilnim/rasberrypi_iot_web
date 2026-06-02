@@ -8,6 +8,9 @@
 //   5. 操作日志记录（LED/风扇 开关、网络错误等）
 // ============================================================
 
+// 页面加载时间戳，用于计算系统运行时长
+const pageLoadTime = Date.now();
+
 // ------------------------------------------------------------
 // els：页面 DOM 元素缓存
 // 把常用的 HTML 元素一次性取出来，避免每次操作都重复 getElementById
@@ -20,17 +23,30 @@ const els = {
     ledStatus: document.getElementById("led-status"), // LED 状态文字（开/关/不可用）
     ledBulb: document.getElementById("led-bulb"),    // LED 灯泡图形
     ledGlow: document.getElementById("led-glow"),    // LED 发光光晕
+    ledLastTime: document.getElementById("led-last-time"), // LED 最近操作时间
     fanSwitch: document.getElementById("fan-switch"), // 风扇滑动开关
     fanStatus: document.getElementById("fan-status"), // 风扇状态文字
     fanBulb: document.getElementById("fan-bulb"),    // 风扇图标
     fanGlow: document.getElementById("fan-glow"),    // 风扇发光光晕
+    fanLastTime: document.getElementById("fan-last-time"), // 风扇最近操作时间
     backendStatus: document.getElementById("backend-status"), // "后端服务" 状态行
     deviceStatus: document.getElementById("device-status"),   // 顶部徽章内的文字
     deviceBadge: document.getElementById("device-badge"),     // 顶部设备状态徽章（带圆点）
+    overviewDeviceStatus: document.getElementById("overview-device-status"), // 设备概览卡片里的状态
+    lastUpdateTime: document.getElementById("last-update-time"), // 传感器最近更新时间
+    uptime: document.getElementById("uptime"),       // 系统运行时长
     logList: document.getElementById("log-list"),    // 操作日志列表容器
     clearLog: document.getElementById("clear-log"),  // 清空日志按钮
     loraStatus: document.getElementById("lora-status"), // LoRa 连接状态行
 };
+
+// ------------------------------------------------------------
+// formatTime(date)
+// 把时间对象格式化为 "HH:MM:SS" 字符串
+// ------------------------------------------------------------
+function formatTime(date) {
+    return date.toLocaleTimeString("zh-CN", { hour12: false });
+}
 
 // ------------------------------------------------------------
 // addLog(message, type)
@@ -44,18 +60,44 @@ const els = {
 // ------------------------------------------------------------
 function addLog(message, type = "info") {
     const entry = document.createElement("div");
-    // 为日志条目设置 CSS 类，包含通用样式和颜色类型
     entry.className = `log-entry ${type}`;
-    // 生成当前时间字符串，格式如 "14:32:05"，24小时制
-    const time = new Date().toLocaleTimeString("zh-CN", { hour12: false });
-    // innerHTML 插入时间和消息文本
+    const time = formatTime(new Date());
     entry.innerHTML = `<span class="log-time">${time}</span><span class="log-text">${message}</span>`;
-    // prepend 把新日志插到最前面（最新日志在最上面）
     els.logList.prepend(entry);
-    // 当日志超过 50 条时，删除最旧的一条（也就是最后一个子元素）
     if (els.logList.children.length > 50) {
         els.logList.removeChild(els.logList.lastChild);
     }
+}
+
+// ------------------------------------------------------------
+// updateLastTime(type)
+// 记录 LED 或风扇的最近操作时间，显示在控制卡片中
+// type: "led" 或 "fan"
+// 这是纯前端功能，不需要后端支持
+// ------------------------------------------------------------
+function updateLastTime(type) {
+    const now = formatTime(new Date());
+    if (type === "led" && els.ledLastTime) {
+        els.ledLastTime.innerText = now;
+    }
+    if (type === "fan" && els.fanLastTime) {
+        els.fanLastTime.innerText = now;
+    }
+}
+
+// ------------------------------------------------------------
+// updateUptime()
+// 计算并显示页面加载以来的运行时长
+// 这是纯前端功能，每秒更新一次
+// ------------------------------------------------------------
+function updateUptime() {
+    if (!els.uptime) return;
+    const diffSec = Math.floor((Date.now() - pageLoadTime) / 1000);
+    const h = Math.floor(diffSec / 3600);
+    const m = Math.floor((diffSec % 3600) / 60);
+    const s = diffSec % 60;
+    els.uptime.innerText =
+        `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
 // ------------------------------------------------------------
@@ -69,10 +111,10 @@ function addLog(message, type = "info") {
 function setBackendOnline(online) {
     if (online) {
         els.backendStatus.innerText = "正常";
-        els.backendStatus.className = "info-val status-ok";   // 绿色样式
+        els.backendStatus.className = "overview-value status-ok";
     } else {
         els.backendStatus.innerText = "断开";
-        els.backendStatus.className = "info-val status-err";  // 红色样式
+        els.backendStatus.className = "overview-value status-err";
     }
 }
 
@@ -82,29 +124,39 @@ function setBackendOnline(online) {
 // online = true  时：
 //   - "LoRa连接状态" 显示绿色"设备在线"
 //   - 顶部徽章显示"设备在线"（绿色圆点）
+//   - 设备概览显示"设备在线"
 //   - LED 开关、风扇开关都启用（可以点击）
 // online = false 时：
 //   - "LoRa连接状态" 显示红色"设备离线"
 //   - 顶部徽章显示"设备离线"（红色圆点）
+//   - 设备概览显示"设备离线"
 //   - LED 开关、风扇开关都禁用（防止离线时误操作）
 // ------------------------------------------------------------
 function setLoraOnline(online) {
     if (online) {
         els.loraStatus.innerText = "设备在线";
-        els.loraStatus.className = "info-val status-ok";      // 绿色
+        els.loraStatus.className = "info-val status-ok";
         els.deviceStatus.innerText = "设备在线";
-        els.deviceBadge.classList.add("online");              // 加绿色 CSS 类
-        els.deviceBadge.classList.remove("offline");          // 去掉红色 CSS 类
-        els.ledSwitch.disabled = false;                       // LED 开关可用
-        els.fanSwitch.disabled = false;                       // 风扇开关可用
+        els.deviceBadge.classList.add("online");
+        els.deviceBadge.classList.remove("offline");
+        els.ledSwitch.disabled = false;
+        els.fanSwitch.disabled = false;
+        if (els.overviewDeviceStatus) {
+            els.overviewDeviceStatus.innerText = "设备在线";
+            els.overviewDeviceStatus.className = "overview-value status-ok";
+        }
     } else {
         els.loraStatus.innerText = "设备离线";
-        els.loraStatus.className = "info-val status-err";     // 红色
+        els.loraStatus.className = "info-val status-err";
         els.deviceStatus.innerText = "设备离线";
-        els.deviceBadge.classList.add("offline");             // 加红色 CSS 类
-        els.deviceBadge.classList.remove("online");           // 去掉绿色 CSS 类
-        els.ledSwitch.disabled = true;                        // LED 开关禁用
-        els.fanSwitch.disabled = true;                        // 风扇开关禁用
+        els.deviceBadge.classList.add("offline");
+        els.deviceBadge.classList.remove("online");
+        els.ledSwitch.disabled = true;
+        els.fanSwitch.disabled = true;
+        if (els.overviewDeviceStatus) {
+            els.overviewDeviceStatus.innerText = "设备离线";
+            els.overviewDeviceStatus.className = "overview-value status-err";
+        }
     }
 }
 
@@ -112,7 +164,7 @@ function setLoraOnline(online) {
 // updateSensor()
 // 异步获取传感器数据（温度和光照）
 // 请求路径：/api/sensor（nginx 代理到后端 /sensor）
-// 成功：把 temperature 和 light_percent 显示到页面上，标记后端在线
+// 成功：把 temperature 和 light_percent 显示到页面上，标记后端在线，记录更新时间
 // 失败：标记后端断开
 // 这个函数每秒调用一次（见页面底部 setInterval）
 // ------------------------------------------------------------
@@ -120,12 +172,13 @@ async function updateSensor() {
     try {
         const response = await fetch("/api/sensor");
         const data = await response.json();
-        // 把后端返回的数字更新到页面上的 <span> 里
         els.temp.innerText = data.temperature;
         els.light.innerText = data.light_percent;
         setBackendOnline(true);
+        if (els.lastUpdateTime) {
+            els.lastUpdateTime.innerText = formatTime(new Date());
+        }
     } catch (err) {
-        // fetch 失败（后端没响应、网络断开等）
         setBackendOnline(false);
     }
 }
@@ -140,8 +193,8 @@ async function updateSensor() {
 function updateLedVisual(isOn) {
     if (isOn) {
         els.ledStatus.innerText = "开启";
-        els.ledBulb.classList.add("on");   // 蓝色灯泡 + 阴影
-        els.ledGlow.classList.add("on");   // 蓝色光晕
+        els.ledBulb.classList.add("on");
+        els.ledGlow.classList.add("on");
     } else {
         els.ledStatus.innerText = "关闭";
         els.ledBulb.classList.remove("on");
@@ -166,7 +219,6 @@ async function updateLed() {
             els.ledStatus.innerText = "不可用";
             return;
         }
-        // 把 checkbox 的选中状态和服务器同步
         els.ledSwitch.checked = data.on;
         updateLedVisual(data.on);
     } catch (err) {
@@ -178,7 +230,7 @@ async function updateLed() {
 // toggleLed()
 // 用户点击 LED 滑动开关时触发
 // 请求路径：/api/led（POST 方式，发送 JSON {on: true/false}）
-// 成功：更新灯泡视觉效果，记录一条操作日志
+// 成功：更新灯泡视觉效果，记录操作日志和最近操作时间
 // 失败（后端报错或网络错误）：
 //   - 显示错误日志
 //   - 把开关状态回滚到操作前的状态
@@ -194,18 +246,16 @@ async function toggleLed() {
         });
         const data = await response.json();
         if (data.available) {
-            // 后端确认成功，更新页面上的灯泡显示
             updateLedVisual(data.on);
             addLog(`LED 已${data.on ? "开启" : "关闭"}`, "action");
+            updateLastTime("led");
         } else {
-            // 后端返回 available=false（比如 LoRa 不可用）
             addLog("LED 控制失败：硬件不可用", "error");
-            els.ledSwitch.checked = !newState;  // 回滚开关状态
+            els.ledSwitch.checked = !newState;
         }
     } catch (err) {
-        // fetch 网络错误（后端没响应）
         addLog("LED 控制失败：网络错误", "error");
-        els.ledSwitch.checked = !newState;      // 回滚开关状态
+        els.ledSwitch.checked = !newState;
     }
 }
 
@@ -219,8 +269,8 @@ async function toggleLed() {
 function updateFanVisual(isOn) {
     if (isOn) {
         els.fanStatus.innerText = "开启";
-        els.fanBulb.classList.add("on");   // 绿色风扇图标 + 阴影
-        els.fanGlow.classList.add("on");   // 绿色光晕
+        els.fanBulb.classList.add("on");
+        els.fanGlow.classList.add("on");
     } else {
         els.fanStatus.innerText = "关闭";
         els.fanBulb.classList.remove("on");
@@ -244,7 +294,6 @@ async function updateFan() {
             els.fanStatus.innerText = "不可用";
             return;
         }
-        // 把 checkbox 的选中状态和服务器同步
         els.fanSwitch.checked = data.on;
         updateFanVisual(data.on);
     } catch (err) {
@@ -256,7 +305,7 @@ async function updateFan() {
 // toggleFan()
 // 用户点击风扇滑动开关时触发
 // 请求路径：/api/fan（POST 方式，发送 JSON {on: true/false}）
-// 成功：更新风扇视觉效果，记录一条操作日志
+// 成功：更新风扇视觉效果，记录操作日志和最近操作时间
 // 失败：显示错误日志，回滚开关状态
 // 注意：如果 LoRa 离线，开关会被 disabled，这个函数不会被触发
 // ------------------------------------------------------------
@@ -272,6 +321,7 @@ async function toggleFan() {
         if (data.available) {
             updateFanVisual(data.on);
             addLog(`风扇已${data.on ? "开启" : "关闭"}`, "action");
+            updateLastTime("fan");
         } else {
             addLog("风扇控制失败：硬件不可用", "error");
             els.fanSwitch.checked = !newState;
@@ -290,6 +340,7 @@ async function toggleFan() {
 // 根据 online 字段更新：
 //   - LoRa 连接状态行文字颜色
 //   - 顶部设备徽章
+//   - 设备概览卡片
 //   - LED 开关、风扇开关是否可点击
 // 如果请求本身失败（fetch 抛异常），把后端和 LoRa 都标记为离线
 // ------------------------------------------------------------
@@ -299,11 +350,9 @@ async function updateLoraStatus() {
         const data = await response.json();
         setLoraOnline(data.online);
         if (data.online) {
-            // LoRa 在线时，顺便把后端状态也刷新为正常
             setBackendOnline(true);
         }
     } catch (err) {
-        // fetch 失败（后端挂了或网络断开）
         setLoraOnline(false);
         setBackendOnline(false);
     }
@@ -332,11 +381,14 @@ els.clearLog.addEventListener("click", () => {
 // 5. 立即获取一次风扇当前状态
 // 6. 立即获取一次 LoRa 连接状态
 // 7. 启动定时器，每 3 秒自动刷新 LoRa 状态
+// 8. 启动定时器，每秒刷新系统运行时长
 // ------------------------------------------------------------
 addLog("系统初始化完成，开始连接设备...", "info");
-updateSensor();                               // 第一次获取温度/光照
-setInterval(updateSensor, 1000);              // 之后每秒刷新
-updateLed();                                  // 第一次获取 LED 状态
-updateFan();                                  // 第一次获取风扇状态
-updateLoraStatus();                           // 第一次获取 LoRa 状态
-setInterval(updateLoraStatus, 3000);          // 之后每 3 秒刷新
+updateSensor();
+setInterval(updateSensor, 1000);
+updateLed();
+updateFan();
+updateLoraStatus();
+setInterval(updateLoraStatus, 3000);
+updateUptime();
+setInterval(updateUptime, 1000);
