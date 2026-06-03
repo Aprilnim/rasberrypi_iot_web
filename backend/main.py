@@ -56,6 +56,9 @@ bus = smbus.SMBus(1)
 # PCF8591 ADC 芯片的 I2C 地址（硬件固定， datasheet 上写 0x48）
 ADDR = 0x48
 
+# 服务启动时间戳，用于计算后端运行时长
+APP_START_TIME = time.time()
+
 # ============================================================
 # LoRa 模块初始化
 # ============================================================
@@ -528,6 +531,27 @@ def set_fan(state: FanState):
         return {"on": state.on, "available": True}
     else:
         return {"on": lora.get_fan_state(), "available": True, "error": result["message"]}
+
+
+# ------------------------------------------------------------
+# GET /uptime
+# 系统运行时长接口
+# 返回后端服务自启动以来的运行时间
+# {
+#   "uptime_seconds": 3600,
+#   "uptime": "01:00:00"
+# }
+# ------------------------------------------------------------
+@app.get("/uptime")
+def get_uptime():
+    elapsed = int(time.time() - APP_START_TIME)
+    h = elapsed // 3600
+    m = (elapsed % 3600) // 60
+    s = elapsed % 60
+    return {
+        "uptime_seconds": elapsed,
+        "uptime": f"{h:02d}:{m:02d}:{s:02d}"
+    }
 
 
 # ------------------------------------------------------------

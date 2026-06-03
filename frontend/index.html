@@ -8,6 +8,14 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <script>
+        (function () {
+            const savedTheme = localStorage.getItem("theme");
+            const systemLight = window.matchMedia &&
+                window.matchMedia("(prefers-color-scheme: light)").matches;
+            document.body.dataset.theme = savedTheme || (systemLight ? "light" : "dark");
+        })();
+    </script>
     <div class="container">
         <header class="page-header">
             <div class="header-left">
@@ -15,6 +23,10 @@
                 <p class="subtitle">物联网实时数据面板</p>
             </div>
             <div class="header-right">
+                <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换浅色模式">
+                    <span class="theme-icon" id="theme-icon">☀</span>
+                    <span id="theme-label">浅色</span>
+                </button>
                 <div class="device-badge" id="device-badge">
                     <span class="badge-dot"></span>
                     <span id="device-status">检测中...</span>

@@ -8,8 +8,6 @@
 //   5. 操作日志记录（LED/风扇 开关、网络错误等）
 // ============================================================
 
-// 页面加载时间戳，用于计算系统运行时长
-const pageLoadTime = Date.now();
 
 // ------------------------------------------------------------
 // els：页面 DOM 元素缓存
@@ -38,7 +36,50 @@ const els = {
     logList: document.getElementById("log-list"),    // 操作日志列表容器
     clearLog: document.getElementById("clear-log"),  // 清空日志按钮
     loraStatus: document.getElementById("lora-status"), // LoRa 连接状态行
+    themeToggle: document.getElementById("theme-toggle"), // 深色/浅色主题切换按钮
+    themeIcon: document.getElementById("theme-icon"), // 主题按钮图标
+    themeLabel: document.getElementById("theme-label"), // 主题按钮文字
 };
+
+// ------------------------------------------------------------
+// 主题模式：手动优先 + 系统默认
+// localStorage 有 theme 时优先使用用户选择；
+// 没有保存过时，跟随浏览器/系统 prefers-color-scheme。
+// ------------------------------------------------------------
+const themeQuery = window.matchMedia("(prefers-color-scheme: light)");
+
+function getPreferredTheme() {
+    const savedTheme = localStorage.getItem("theme");
+    if (savedTheme === "light" || savedTheme === "dark") {
+        return savedTheme;
+    }
+    return themeQuery.matches ? "light" : "dark";
+}
+
+function applyTheme(theme) {
+    const nextTheme = theme === "light" ? "light" : "dark";
+    document.body.dataset.theme = nextTheme;
+
+    if (!els.themeToggle) return;
+
+    const targetTheme = nextTheme === "light" ? "dark" : "light";
+    const targetText = targetTheme === "light" ? "浅色" : "深色";
+    els.themeLabel.innerText = targetText;
+    els.themeIcon.innerText = targetTheme === "light" ? "☀" : "☾";
+    els.themeToggle.setAttribute("aria-label", `切换${targetText}模式`);
+}
+
+function toggleTheme() {
+    const currentTheme = document.body.dataset.theme === "light" ? "light" : "dark";
+    const nextTheme = currentTheme === "light" ? "dark" : "light";
+    localStorage.setItem("theme", nextTheme);
+    applyTheme(nextTheme);
+}
+
+function syncSystemTheme(event) {
+    if (localStorage.getItem("theme")) return;
+    applyTheme(event.matches ? "light" : "dark");
+}
 
 // ------------------------------------------------------------
 // formatTime(date)
@@ -86,18 +127,25 @@ function updateLastTime(type) {
 }
 
 // ------------------------------------------------------------
-// updateUptime()
-// 计算并显示页面加载以来的运行时长
-// 这是纯前端功能，每秒更新一次
+// updateUptimeFromBackend()
+// 从后端获取真实的系统运行时长（Docker 容器启动后的时间）
+// 请求路径：/api/uptime（GET 方式）
+// 后端返回：{ "uptime_seconds": 3600, "uptime": "01:00:00" }
+// 成功：用后端返回的格式化字符串更新"系统运行"
+// 失败：静默处理，不覆盖已有显示
+// 这个函数每秒调用一次（见页面底部 setInterval）
 // ------------------------------------------------------------
-function updateUptime() {
+async function updateUptimeFromBackend() {
     if (!els.uptime) return;
-    const diffSec = Math.floor((Date.now() - pageLoadTime) / 1000);
-    const h = Math.floor(diffSec / 3600);
-    const m = Math.floor((diffSec % 3600) / 60);
-    const s = diffSec % 60;
-    els.uptime.innerText =
-        `${h.toString().padStart(2, "0")}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+    try {
+        const response = await fetch("/api/uptime");
+        const data = await response.json();
+        if (data.uptime) {
+            els.uptime.innerText = data.uptime;
+        }
+    } catch (err) {
+        // 请求失败时静默处理，保留上一次显示
+    }
 }
 
 // ------------------------------------------------------------
@@ -366,10 +414,12 @@ async function updateLoraStatus() {
 // ------------------------------------------------------------
 els.ledSwitch.addEventListener("change", toggleLed);
 els.fanSwitch.addEventListener("change", toggleFan);
+els.themeToggle.addEventListener("click", toggleTheme);
 els.clearLog.addEventListener("click", () => {
     els.logList.innerHTML = "";
     addLog("日志已清空", "info");
 });
+themeQuery.addEventListener("change", syncSystemTheme);
 
 // ------------------------------------------------------------
 // 页面初始化
@@ -383,6 +433,7 @@ els.clearLog.addEventListener("click", () => {
 // 7. 启动定时器，每 3 秒自动刷新 LoRa 状态
 // 8. 启动定时器，每秒刷新系统运行时长
 // ------------------------------------------------------------
+applyTheme(getPreferredTheme());
 addLog("系统初始化完成，开始连接设备...", "info");
 updateSensor();
 setInterval(updateSensor, 1000);
@@ -390,5 +441,5 @@ updateLed();
 updateFan();
 updateLoraStatus();
 setInterval(updateLoraStatus, 3000);
-updateUptime();
-setInterval(updateUptime, 1000);
+updateUptimeFromBackend();
+setInterval(updateUptimeFromBackend, 1000);
