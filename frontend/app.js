@@ -144,6 +144,8 @@ function showAuthToast(title, message, type = "info") {
     }, 2800);
 }
 
+window.showAuthToast = showAuthToast;
+
 function flashAuthButton() {
     if (!els.loginButton) return;
     els.loginButton.classList.add("auth-flash");
@@ -198,6 +200,8 @@ async function login(event) {
 
         setAuthToken(data.access_token);
         closeLoginModal();
+        flashAuthButton();
+        showAuthToast("控制权限已登录", "现在可以控制 LED 与风扇", "success");
         addLog("控制权限登录成功", "info");
     } catch (err) {
         showLoginError("登录失败：网络错误");
