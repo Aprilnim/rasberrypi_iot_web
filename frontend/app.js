@@ -48,9 +48,13 @@ const els = {
     loginError: document.getElementById("login-error"), // 登录错误提示
     loginClose: document.getElementById("login-close"), // 登录弹窗关闭按钮
     loginSubmit: document.getElementById("login-submit"), // 登录提交按钮
+    authToast: document.getElementById("auth-toast"), // 权限状态提示
+    authToastTitle: document.getElementById("auth-toast-title"), // 权限提示标题
+    authToastMessage: document.getElementById("auth-toast-message"), // 权限提示内容
 };
 
 const AUTH_TOKEN_KEY = "yl40iot_access_token";
+let authToastTimer = null;
 
 // ------------------------------------------------------------
 // 主题模式：手动优先 + 系统默认
@@ -127,6 +131,25 @@ function updateAuthButton() {
     }
 }
 
+function showAuthToast(title, message, type = "info") {
+    if (!els.authToast) return;
+    window.clearTimeout(authToastTimer);
+    els.authToastTitle.innerText = title;
+    els.authToastMessage.innerText = message;
+    els.authToast.classList.remove("hidden", "success", "error", "info");
+    els.authToast.classList.add(type, "show");
+    authToastTimer = window.setTimeout(() => {
+        els.authToast.classList.remove("show");
+        window.setTimeout(() => els.authToast.classList.add("hidden"), 220);
+    }, 2800);
+}
+
+function flashAuthButton() {
+    if (!els.loginButton) return;
+    els.loginButton.classList.add("auth-flash");
+    window.setTimeout(() => els.loginButton.classList.remove("auth-flash"), 900);
+}
+
 function showLoginError(message) {
     els.loginError.innerText = message;
     els.loginError.classList.remove("hidden");
@@ -201,6 +224,8 @@ async function logout() {
     }
     // 登出只清理控制权限 token，不改变 LED/FAN 的硬件状态。
     setAuthToken(null);
+    flashAuthButton();
+    showAuthToast("控制权限已退出", "LED 与风扇状态保持不变", "success");
     addLog("控制权限已退出", "info");
 }
 
