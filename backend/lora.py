@@ -13,8 +13,11 @@ class LoRaNode:
         self.ser = None
         self._led_state = False
         self._fan_state = False
+        self._state_updated_at = None
+        self._state_error = "Device state cache warming up"
         self._available = False
-        self._lock = threading.Lock()
+        self._serial_lock = threading.Lock()
+        self._state_lock = threading.Lock()
 
         try:
             import RPi.GPIO as GPIO
@@ -78,7 +81,7 @@ class LoRaNode:
         for attempt in range(1, self.retries + 1):
             print(f"TX: {message} (attempt {attempt}/{self.retries})")
 
-            with self._lock:
+            with self._serial_lock:
                 try:
                     self.ser.write((message + "\n").encode())
                     self.ser.flush()
@@ -104,10 +107,13 @@ class LoRaNode:
                             if recv_payload == expected_ack_payload:
                                 # 更新对应设备状态
                                 is_on = (action == "ON")
-                                if device == "LED":
-                                    self._led_state = is_on
-                                elif device == "FAN":
-                                    self._fan_state = is_on
+                                with self._state_lock:
+                                    if device == "LED":
+                                        self._led_state = is_on
+                                    elif device == "FAN":
+                                        self._fan_state = is_on
+                                    self._state_updated_at = time.time()
+                                    self._state_error = None
                                 print(f"ACK OK: {recv_payload}")
                                 return {"success": True, "message": f"ACK: {recv_payload}"}
                             else:
@@ -129,6 +135,74 @@ class LoRaNode:
         """发送风扇控制命令"""
         return self.send_device_command("FAN", action)
 
+    def query_device_state(self) -> dict:
+        """通过 LoRa 查询树莓派 B 的真实 LED/FAN 状态并更新本地缓存。
+
+        发送格式：QUERY,STATE,<CRC>
+        返回格式：STATE,LED,ON|OFF,FAN,ON|OFF,<CRC>
+        """
+        if not self._available:
+            return {"success": False, "message": "LoRa not available"}
+
+        payload = "QUERY,STATE"
+        message = self.build_message(payload)
+
+        with self._serial_lock:
+            try:
+                self.ser.write((message + "\n").encode())
+                self.ser.flush()
+            except Exception as e:
+                with self._state_lock:
+                    self._state_error = f"state query tx error: {e}"
+                print(f"TX ERROR (STATE): {e}")
+                return {"success": False, "message": str(e)}
+
+            start = time.time()
+            while time.time() - start < self.timeout:
+                try:
+                    if self.ser.in_waiting <= 0:
+                        time.sleep(0.01)
+                        continue
+
+                    raw = self.ser.readline().decode().strip()
+                    if not raw:
+                        continue
+
+                    ok, recv_payload = self.verify_crc(raw)
+                    if not ok:
+                        print(f"CRC ERROR: raw={raw}")
+                        continue
+
+                    parts = recv_payload.split(",")
+                    if (
+                        len(parts) == 5
+                        and parts[0] == "STATE"
+                        and parts[1] == "LED"
+                        and parts[3] == "FAN"
+                        and parts[2] in ("ON", "OFF")
+                        and parts[4] in ("ON", "OFF")
+                    ):
+                        with self._state_lock:
+                            self._led_state = parts[2] == "ON"
+                            self._fan_state = parts[4] == "ON"
+                            self._state_updated_at = time.time()
+                            self._state_error = None
+                        return {
+                            "success": True,
+                            "led_on": parts[2] == "ON",
+                            "fan_on": parts[4] == "ON",
+                        }
+
+                    print(f"STATE MISMATCH: got={recv_payload}")
+                except Exception as e:
+                    print(f"RX ERROR (STATE): {e}")
+                    continue
+
+        with self._state_lock:
+            self._state_error = "state query timeout"
+        print("TIMEOUT (STATE): No state response received")
+        return {"success": False, "message": "Timeout waiting for device state"}
+
     def ping_once(self) -> bool:
         if not self._available:
             return False
@@ -137,7 +211,7 @@ class LoRaNode:
         message = self.build_message(payload)
         expected = "PONG"
 
-        with self._lock:
+        with self._serial_lock:
             print(f"TX: {message} (PING)")
             try:
                 self.ser.write((message + "\n").encode())
@@ -174,10 +248,27 @@ class LoRaNode:
         return False
 
     def get_led_state(self) -> bool:
-        return self._led_state
+        with self._state_lock:
+            return self._led_state
 
     def get_fan_state(self) -> bool:
-        return self._fan_state
+        with self._state_lock:
+            return self._fan_state
+
+    def get_device_state_snapshot(self) -> dict:
+        with self._state_lock:
+            updated_at = self._state_updated_at
+            age_ms = None
+            if updated_at is not None:
+                age_ms = int((time.time() - updated_at) * 1000)
+            return {
+                "led_on": self._led_state,
+                "fan_on": self._fan_state,
+                "updated_at": updated_at,
+                "age_ms": age_ms,
+                "cached": True,
+                "error": self._state_error,
+            }
 
     def close(self):
         if self.ser:

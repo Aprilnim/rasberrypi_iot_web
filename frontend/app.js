@@ -39,7 +39,18 @@ const els = {
     themeToggle: document.getElementById("theme-toggle"), // 深色/浅色主题切换按钮
     themeIcon: document.getElementById("theme-icon"), // 主题按钮图标
     themeLabel: document.getElementById("theme-label"), // 主题按钮文字
+    loginButton: document.getElementById("login-button"), // 登录按钮
+    loginLabel: document.getElementById("login-label"), // 登录按钮文字
+    loginModal: document.getElementById("login-modal"), // 登录弹窗
+    loginForm: document.getElementById("login-form"), // 登录表单
+    loginUsername: document.getElementById("login-username"), // 登录用户名
+    loginPassword: document.getElementById("login-password"), // 登录密码
+    loginError: document.getElementById("login-error"), // 登录错误提示
+    loginClose: document.getElementById("login-close"), // 登录弹窗关闭按钮
+    loginSubmit: document.getElementById("login-submit"), // 登录提交按钮
 };
+
+const AUTH_TOKEN_KEY = "yl40iot_access_token";
 
 // ------------------------------------------------------------
 // 主题模式：手动优先 + 系统默认
@@ -79,6 +90,139 @@ function toggleTheme() {
 function syncSystemTheme(event) {
     if (localStorage.getItem("theme")) return;
     applyTheme(event.matches ? "light" : "dark");
+}
+
+function getAuthToken() {
+    return localStorage.getItem(AUTH_TOKEN_KEY);
+}
+
+function setAuthToken(token) {
+    if (token) {
+        localStorage.setItem(AUTH_TOKEN_KEY, token);
+    } else {
+        localStorage.removeItem(AUTH_TOKEN_KEY);
+    }
+    updateAuthButton();
+}
+
+function getAuthHeaders() {
+    const token = getAuthToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function isAuthenticated() {
+    return Boolean(getAuthToken());
+}
+
+function updateAuthButton() {
+    if (!els.loginButton || !els.loginLabel) return;
+    if (isAuthenticated()) {
+        els.loginLabel.innerText = "登出";
+        els.loginButton.classList.add("authed");
+        els.loginButton.setAttribute("aria-label", "退出控制权限");
+    } else {
+        els.loginLabel.innerText = "登录";
+        els.loginButton.classList.remove("authed");
+        els.loginButton.setAttribute("aria-label", "登录控制权限");
+    }
+}
+
+function showLoginError(message) {
+    els.loginError.innerText = message;
+    els.loginError.classList.remove("hidden");
+}
+
+function clearLoginError() {
+    els.loginError.innerText = "";
+    els.loginError.classList.add("hidden");
+}
+
+function openLoginModal() {
+    clearLoginError();
+    els.loginModal.classList.remove("hidden");
+    els.loginModal.setAttribute("aria-hidden", "false");
+    setTimeout(() => els.loginUsername.focus(), 0);
+}
+
+function closeLoginModal() {
+    els.loginModal.classList.add("hidden");
+    els.loginModal.setAttribute("aria-hidden", "true");
+    els.loginForm.reset();
+    clearLoginError();
+}
+
+async function login(event) {
+    event.preventDefault();
+    clearLoginError();
+    els.loginSubmit.disabled = true;
+    els.loginSubmit.innerText = "登录中...";
+
+    try {
+        const response = await fetch("/api/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                username: els.loginUsername.value.trim(),
+                password: els.loginPassword.value,
+            }),
+        });
+        const data = await response.json();
+
+        if (!response.ok) {
+            showLoginError(data.detail || "登录失败");
+            return;
+        }
+
+        setAuthToken(data.access_token);
+        closeLoginModal();
+        addLog("控制权限登录成功", "info");
+    } catch (err) {
+        showLoginError("登录失败：网络错误");
+    } finally {
+        els.loginSubmit.disabled = false;
+        els.loginSubmit.innerText = "登录";
+    }
+}
+
+async function logout() {
+    const token = getAuthToken();
+    if (!token) {
+        openLoginModal();
+        return;
+    }
+
+    try {
+        await fetch("/api/auth/logout", {
+            method: "POST",
+            headers: getAuthHeaders(),
+        });
+    } catch (err) {
+        // 即使后端退出失败，本地也清掉 token，避免继续误用旧凭证。
+    }
+    // 登出只清理控制权限 token，不改变 LED/FAN 的硬件状态。
+    setAuthToken(null);
+    addLog("控制权限已退出", "info");
+}
+
+async function syncAuthState() {
+    const token = getAuthToken();
+    if (!token) {
+        updateAuthButton();
+        return;
+    }
+
+    try {
+        const response = await fetch("/api/auth/me", {
+            headers: getAuthHeaders(),
+        });
+        if (!response.ok) {
+            setAuthToken(null);
+        } else {
+            updateAuthButton();
+        }
+    } catch (err) {
+        updateAuthButton();
+    }
 }
 
 // ------------------------------------------------------------
@@ -286,14 +430,26 @@ async function updateLed() {
 // ------------------------------------------------------------
 async function toggleLed() {
     const newState = els.ledSwitch.checked;
+    if (!isAuthenticated()) {
+        els.ledSwitch.checked = !newState;
+        addLog("LED 控制需要先登录", "error");
+        openLoginModal();
+        return;
+    }
+
     try {
         const response = await fetch("/api/led", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...getAuthHeaders() },
             body: JSON.stringify({ on: newState }),
         });
         const data = await response.json();
-        if (data.available) {
+        if (response.status === 401 || response.status === 403) {
+            setAuthToken(null);
+            addLog(data.detail || "LED 控制需要重新登录", "error");
+            els.ledSwitch.checked = !newState;
+            openLoginModal();
+        } else if (data.available) {
             updateLedVisual(data.on);
             addLog(`LED 已${data.on ? "开启" : "关闭"}`, "action");
             updateLastTime("led");
@@ -359,14 +515,26 @@ async function updateFan() {
 // ------------------------------------------------------------
 async function toggleFan() {
     const newState = els.fanSwitch.checked;
+    if (!isAuthenticated()) {
+        els.fanSwitch.checked = !newState;
+        addLog("风扇控制需要先登录", "error");
+        openLoginModal();
+        return;
+    }
+
     try {
         const response = await fetch("/api/fan", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: { "Content-Type": "application/json", ...getAuthHeaders() },
             body: JSON.stringify({ on: newState }),
         });
         const data = await response.json();
-        if (data.available) {
+        if (response.status === 401 || response.status === 403) {
+            setAuthToken(null);
+            addLog(data.detail || "风扇控制需要重新登录", "error");
+            els.fanSwitch.checked = !newState;
+            openLoginModal();
+        } else if (data.available) {
             updateFanVisual(data.on);
             addLog(`风扇已${data.on ? "开启" : "关闭"}`, "action");
             updateLastTime("fan");
@@ -415,6 +583,25 @@ async function updateLoraStatus() {
 els.ledSwitch.addEventListener("change", toggleLed);
 els.fanSwitch.addEventListener("change", toggleFan);
 els.themeToggle.addEventListener("click", toggleTheme);
+els.loginButton.addEventListener("click", () => {
+    if (isAuthenticated()) {
+        logout();
+    } else {
+        openLoginModal();
+    }
+});
+els.loginForm.addEventListener("submit", login);
+els.loginClose.addEventListener("click", closeLoginModal);
+els.loginModal.addEventListener("click", (event) => {
+    if (event.target === els.loginModal) {
+        closeLoginModal();
+    }
+});
+document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !els.loginModal.classList.contains("hidden")) {
+        closeLoginModal();
+    }
+});
 els.clearLog.addEventListener("click", () => {
     els.logList.innerHTML = "";
     addLog("日志已清空", "info");
@@ -434,6 +621,7 @@ themeQuery.addEventListener("change", syncSystemTheme);
 // 8. 启动定时器，每秒刷新系统运行时长
 // ------------------------------------------------------------
 applyTheme(getPreferredTheme());
+syncAuthState();
 addLog("系统初始化完成，开始连接设备...", "info");
 updateSensor();
 setInterval(updateSensor, 1000);

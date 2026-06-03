@@ -23,6 +23,9 @@
                 <p class="subtitle">物联网实时数据面板</p>
             </div>
             <div class="header-right">
+                <button class="login-btn" id="login-button" type="button" aria-label="登录控制权限">
+                    <span id="login-label">登录</span>
+                </button>
                 <button class="theme-toggle" id="theme-toggle" type="button" aria-label="切换浅色模式">
                     <span class="theme-icon" id="theme-icon">☀</span>
                     <span id="theme-label">浅色</span>
@@ -193,6 +196,59 @@
                 <div class="log-list" id="log-list"></div>
             </section>
         </main>
+    </div>
+
+    <div class="modal-backdrop hidden" id="login-modal" aria-hidden="true">
+        <div class="login-modal" role="dialog" aria-modal="true" aria-labelledby="login-title">
+            <div class="login-visual">
+                <div class="login-orbit">
+                    <span></span>
+                    <span></span>
+                    <span></span>
+                    <div class="login-core">YL</div>
+                </div>
+                <div class="login-visual-copy">
+                    <h2>硬件控制权限</h2>
+                    <p>登录后才能写入 LoRa 控制链路，传感器与设备状态仍保持实时可见。</p>
+                </div>
+                <div class="login-signal-grid">
+                    <div>
+                        <span>AUTH</span>
+                        <strong>TOKEN</strong>
+                    </div>
+                    <div>
+                        <span>WRITE</span>
+                        <strong>LOCKED</strong>
+                    </div>
+                    <div>
+                        <span>BUS</span>
+                        <strong>SERIAL</strong>
+                    </div>
+                </div>
+            </div>
+            <div class="login-panel">
+                <div class="login-modal-header">
+                    <div>
+                        <span class="login-kicker">SECURE CONTROL</span>
+                        <h2 id="login-title">登录控制权限</h2>
+                    </div>
+                    <button class="modal-close" id="login-close" type="button" aria-label="关闭登录弹窗">×</button>
+                </div>
+                <form class="login-form" id="login-form">
+                    <label class="login-field">
+                        <span>用户名</span>
+                        <input id="login-username" name="username" type="text" autocomplete="username" required>
+                    </label>
+                    <label class="login-field">
+                        <span>密码</span>
+                        <input id="login-password" name="password" type="password" autocomplete="current-password" required>
+                    </label>
+                    <p class="login-help">注册请联系管理员</p>
+                    <p class="login-error hidden" id="login-error"></p>
+                    <button class="login-submit" id="login-submit" type="submit">登录</button>
+                </form>
+            </div>
+        </div>
     </div>
 
     <script src="app.js"></script>

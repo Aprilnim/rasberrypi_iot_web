@@ -23,11 +23,16 @@
 # threading:     Python 多线程，用来启动后台心跳线程
 # time:          时间相关函数
 # ------------------------------------------------------------
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import hashlib
+import hmac
 import smbus2 as smbus
 import math
+import os
+import secrets
+import sqlite3
 import threading
 import time
 
@@ -58,6 +63,10 @@ ADDR = 0x48
 
 # 服务启动时间戳，用于计算后端运行时长
 APP_START_TIME = time.time()
+
+# SQLite 鉴权数据库。树莓派部署时使用 /home/pi/yl40iot.db。
+AUTH_DB_PATH = os.environ.get("YL40IOT_DB_PATH", "/home/pi/yl40iot.db")
+AUTH_TOKEN_TTL_SECONDS = 24 * 60 * 60
 
 # ============================================================
 # LoRa 模块初始化
@@ -97,6 +106,122 @@ class LedState(BaseModel):
 
 class FanState(BaseModel):
     on: bool
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+# ============================================================
+# 控制权限鉴权
+# ============================================================
+# GET 接口只读缓存，不要求登录；POST /led 和 POST /fan 会写硬件，必须登录。
+# token 明文只返回给前端一次，数据库里只保存 token_hash。
+# ------------------------------------------------------------
+def get_auth_db():
+    conn = sqlite3.connect(AUTH_DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    """校验密码。
+
+    推荐格式：pbkdf2_sha256$iterations$salt$hex_digest
+    兼容格式：64 位 sha256 十六进制；以及临时明文值。
+    """
+    if not stored_hash:
+        return False
+
+    if stored_hash.startswith("pbkdf2_sha256$"):
+        try:
+            _, iterations, salt, expected = stored_hash.split("$", 3)
+            digest = hashlib.pbkdf2_hmac(
+                "sha256",
+                password.encode("utf-8"),
+                salt.encode("utf-8"),
+                int(iterations),
+            ).hex()
+            return hmac.compare_digest(digest, expected)
+        except Exception:
+            return False
+
+    if len(stored_hash) == 64:
+        digest = hashlib.sha256(password.encode("utf-8")).hexdigest()
+        return hmac.compare_digest(digest, stored_hash)
+
+    return hmac.compare_digest(password, stored_hash)
+
+
+def create_password_hash(password: str) -> str:
+    salt = secrets.token_hex(16)
+    iterations = 260000
+    digest = hashlib.pbkdf2_hmac(
+        "sha256",
+        password.encode("utf-8"),
+        salt.encode("utf-8"),
+        iterations,
+    ).hex()
+    return f"pbkdf2_sha256${iterations}${salt}${digest}"
+
+
+def get_client_ip(request: Request) -> str:
+    cf_ip = request.headers.get("CF-Connecting-IP")
+    forwarded_for = request.headers.get("X-Forwarded-For")
+    if cf_ip:
+        return cf_ip
+    if forwarded_for:
+        return forwarded_for.split(",", 1)[0].strip()
+    return request.client.host if request.client else ""
+
+
+def require_control_auth(authorization: str | None = Header(default=None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="请先登录后再控制硬件")
+
+    token = authorization.removeprefix("Bearer ").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="登录凭证无效")
+
+    now = int(time.time())
+    token_hash = hash_token(token)
+
+    with get_auth_db() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                auth_tokens.id AS token_id,
+                auth_tokens.expires_at,
+                auth_tokens.revoked,
+                users.id AS user_id,
+                users.username,
+                users.role,
+                users.is_active
+            FROM auth_tokens
+            JOIN users ON users.id = auth_tokens.user_id
+            WHERE auth_tokens.token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+
+    if row is None or row["revoked"]:
+        raise HTTPException(status_code=401, detail="登录凭证无效或已退出")
+    if row["expires_at"] <= now:
+        raise HTTPException(status_code=401, detail="登录已过期")
+    if not row["is_active"]:
+        raise HTTPException(status_code=403, detail="用户已禁用")
+
+    return {
+        "id": row["user_id"],
+        "username": row["username"],
+        "role": row["role"],
+        "token_hash": token_hash,
+    }
 
 
 # ============================================================
@@ -172,6 +297,32 @@ def heartbeat_loop():
 if lora is not None and lora.available:
     threading.Thread(target=heartbeat_loop, daemon=True).start()
     print("[LoRa] Heartbeat thread started")
+
+
+# ============================================================
+# LED/FAN 真实状态缓存
+# ============================================================
+# 目的：
+#   用户 GET /led、GET /fan 时只读取后端缓存，不直接访问串口。
+#   后台线程每 1 秒通过 LoRa 查询一次树莓派 B 的真实状态，并更新缓存。
+#   查询过程也在 lora.py 内部使用同一把串口锁，避免和心跳/控制命令串包。
+# ------------------------------------------------------------
+DEVICE_STATE_CACHE_INTERVAL = 1.0
+
+
+def device_state_cache_loop():
+    while True:
+        if lora is not None and lora.available:
+            try:
+                lora.query_device_state()
+            except Exception as e:
+                print(f"[DeviceState] Exception: {e}")
+        time.sleep(DEVICE_STATE_CACHE_INTERVAL)
+
+
+if lora is not None and lora.available:
+    threading.Thread(target=device_state_cache_loop, daemon=True).start()
+    print("[DeviceState] Cache thread started")
 
 
 # ============================================================
@@ -378,6 +529,101 @@ def root():
 
 
 # ------------------------------------------------------------
+# POST /auth/login
+# 登录后签发控制硬件用的 Bearer token。
+# ------------------------------------------------------------
+@app.post("/auth/login")
+def login(data: LoginRequest, request: Request):
+    username = data.username.strip()
+    if not username or not data.password:
+        raise HTTPException(status_code=400, detail="用户名和密码不能为空")
+
+    now = int(time.time())
+    with get_auth_db() as conn:
+        user = conn.execute(
+            """
+            SELECT id, username, password_hash, role, is_active
+            FROM users
+            WHERE username = ?
+            """,
+            (username,),
+        ).fetchone()
+
+        if user is None or not verify_password(data.password, user["password_hash"]):
+            raise HTTPException(status_code=401, detail="用户名或密码错误")
+        if not user["is_active"]:
+            raise HTTPException(status_code=403, detail="用户已禁用")
+
+        token = secrets.token_urlsafe(32)
+        token_hash = hash_token(token)
+        expires_at = now + AUTH_TOKEN_TTL_SECONDS
+
+        # 同一账号只保留一个有效登录，避免多人同时持有控制权限。
+        conn.execute(
+            "UPDATE auth_tokens SET revoked = 1 WHERE user_id = ? AND revoked = 0",
+            (user["id"],),
+        )
+        conn.execute(
+            """
+            INSERT INTO auth_tokens (
+                user_id, token_hash, client_ip, user_agent,
+                expires_at, revoked, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, 0, ?)
+            """,
+            (
+                user["id"],
+                token_hash,
+                get_client_ip(request),
+                request.headers.get("User-Agent", ""),
+                expires_at,
+                now,
+            ),
+        )
+        conn.commit()
+
+    return {
+        "access_token": token,
+        "token_type": "Bearer",
+        "expires_in": AUTH_TOKEN_TTL_SECONDS,
+        "user": {
+            "username": user["username"],
+            "role": user["role"],
+        },
+    }
+
+
+# ------------------------------------------------------------
+# POST /auth/logout
+# 撤销当前 token。只退出控制权限，不改变 LED/FAN 硬件状态。
+# ------------------------------------------------------------
+@app.post("/auth/logout")
+def logout(user=Depends(require_control_auth)):
+    with get_auth_db() as conn:
+        conn.execute(
+            "UPDATE auth_tokens SET revoked = 1 WHERE token_hash = ?",
+            (user["token_hash"],),
+        )
+        conn.commit()
+    return {"ok": True}
+
+
+# ------------------------------------------------------------
+# GET /auth/me
+# 前端刷新页面后可用它检查 localStorage token 是否仍有效。
+# ------------------------------------------------------------
+@app.get("/auth/me")
+def auth_me(user=Depends(require_control_auth)):
+    return {
+        "authenticated": True,
+        "user": {
+            "username": user["username"],
+            "role": user["role"],
+        },
+    }
+
+
+# ------------------------------------------------------------
 # GET /temp
 # 读取温度传感器数据
 # 通道：0x42（YL-40 模块上 CH2 接的是热敏电阻）
@@ -462,7 +708,15 @@ def sensor():
 def get_led():
     if lora is None or not lora.available:
         return {"on": False, "available": False}
-    return {"on": lora.get_led_state(), "available": True}
+    state = lora.get_device_state_snapshot()
+    return {
+        "on": state["led_on"],
+        "available": True,
+        "cached": True,
+        "updated_at": state["updated_at"],
+        "age_ms": state["age_ms"],
+        "error": state["error"],
+    }
 
 
 # ------------------------------------------------------------
@@ -481,7 +735,7 @@ def get_led():
 #   5. 没收到 ACK → 返回当前 LED 状态 + 错误信息
 # ------------------------------------------------------------
 @app.post("/led")
-def set_led(state: LedState):
+def set_led(state: LedState, user=Depends(require_control_auth)):
     if lora is None or not lora.available:
         return {"on": False, "available": False, "error": "LoRa not available"}
 
@@ -491,7 +745,8 @@ def set_led(state: LedState):
     if result["success"]:
         return {"on": state.on, "available": True}
     else:
-        return {"on": lora.get_led_state(), "available": True, "error": result["message"]}
+        cached_state = lora.get_device_state_snapshot()
+        return {"on": cached_state["led_on"], "available": True, "error": result["message"]}
 
 
 # ------------------------------------------------------------
@@ -506,7 +761,15 @@ def set_led(state: LedState):
 def get_fan():
     if lora is None or not lora.available:
         return {"on": False, "available": False}
-    return {"on": lora.get_fan_state(), "available": True}
+    state = lora.get_device_state_snapshot()
+    return {
+        "on": state["fan_on"],
+        "available": True,
+        "cached": True,
+        "updated_at": state["updated_at"],
+        "age_ms": state["age_ms"],
+        "error": state["error"],
+    }
 
 
 # ------------------------------------------------------------
@@ -520,7 +783,7 @@ def get_fan():
 # 注意：树莓派 B 关风扇用的是 GPIO.setup(IN) 而不是 LOW
 # ------------------------------------------------------------
 @app.post("/fan")
-def set_fan(state: FanState):
+def set_fan(state: FanState, user=Depends(require_control_auth)):
     if lora is None or not lora.available:
         return {"on": False, "available": False, "error": "LoRa not available"}
 
@@ -530,7 +793,8 @@ def set_fan(state: FanState):
     if result["success"]:
         return {"on": state.on, "available": True}
     else:
-        return {"on": lora.get_fan_state(), "available": True, "error": result["message"]}
+        cached_state = lora.get_device_state_snapshot()
+        return {"on": cached_state["fan_on"], "available": True, "error": result["message"]}
 
 
 # ------------------------------------------------------------

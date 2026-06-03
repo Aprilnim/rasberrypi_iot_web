@@ -10,6 +10,9 @@ services:
 
     privileged: true
 
+    volumes:
+      - /home/pi/yl40iot.db:/home/pi/yl40iot.db
+
     restart: unless-stopped
 
   nginx:

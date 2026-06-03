@@ -6,10 +6,18 @@
 接收 PING 命令，返回 PONG
 """
 
-import serial
+import sys
 import time
-import RPi.GPIO as GPIO
+import traceback
 from typing import Tuple
+
+try:
+    import serial
+    import RPi.GPIO as GPIO
+except Exception:
+    print("[Receiver B] FATAL: import error", file=sys.stderr, flush=True)
+    traceback.print_exc()
+    sys.exit(1)
 
 PORT = "/dev/ttyS0"
 BAUDRATE = 9600
@@ -62,6 +70,9 @@ def fan_off():
 
 
 def main():
+    print("[Receiver B] Starting...", flush=True)
+    led_is_on = False
+    fan_is_on = False
     GPIO.setmode(GPIO.BCM)
     GPIO.setup(M0, GPIO.OUT)
     GPIO.setup(M1, GPIO.OUT)
@@ -70,11 +81,19 @@ def main():
     GPIO.output(M1, GPIO.LOW)
     GPIO.output(LED_PIN, GPIO.LOW)
     # 风扇默认关闭（输入模式 = 悬空 = 风扇停）
+    GPIO.setup(FAN_PIN, GPIO.OUT)
+    GPIO.output(FAN_PIN, GPIO.LOW)
+    time.sleep(0.2)
+    GPIO.output(FAN_PIN, GPIO.HIGH)
+    time.sleep(0.2)
+    
     fan_off()
     time.sleep(1)
+    print("[Receiver B] GPIO initialized", flush=True)
 
     ser = serial.Serial(PORT, BAUDRATE, timeout=1)
-    print(f"[Receiver B] Listening on {PORT} at {BAUDRATE} baud")
+    print(f"[Receiver B] Listening on {PORT} at {BAUDRATE} baud", flush=True)
+    heartbeat_connected = False
 
     try:
         while True:
@@ -87,8 +106,6 @@ def main():
                 if not raw:
                     continue
 
-                print(f"RX: {raw}")
-
                 ok, payload = verify_crc(raw)
                 if not ok:
                     print(f"CRC ERROR: raw={raw}")
@@ -99,8 +116,23 @@ def main():
                     pong = build_message("PONG")
                     ser.write((pong + "\n").encode())
                     ser.flush()
-                    print(f"TX: {pong}")
+                    if not heartbeat_connected:
+                        heartbeat_connected = True
+                        print(f"RX: {raw}", flush=True)
+                        print(f"TX: {pong}", flush=True)
+                        print("[Receiver B] Heartbeat connected", flush=True)
                     continue
+
+                # 处理状态查询：QUERY,STATE
+                if payload == "QUERY,STATE":
+                    led_state = "ON" if led_is_on else "OFF"
+                    fan_state = "ON" if fan_is_on else "OFF"
+                    state = build_message(f"STATE,LED,{led_state},FAN,{fan_state}")
+                    ser.write((state + "\n").encode())
+                    ser.flush()
+                    continue
+
+                print(f"RX: {raw}")
 
                 # 处理命令：CMD,<DEVICE>,<ACTION>
                 parts = payload.split(",")
@@ -114,17 +146,17 @@ def main():
                 if device == "LED":
                     if action == "ON":
                         GPIO.output(LED_PIN, GPIO.HIGH)
+                        led_is_on = True
                         ack = build_message("ACK,LED,ON")
                         ser.write((ack + "\n").encode())
                         ser.flush()
-                        print(f"TX: {ack}")
                         print("LED ON")
                     elif action == "OFF":
                         GPIO.output(LED_PIN, GPIO.LOW)
+                        led_is_on = False
                         ack = build_message("ACK,LED,OFF")
                         ser.write((ack + "\n").encode())
                         ser.flush()
-                        print(f"TX: {ack}")
                         print("LED OFF")
                     else:
                         print(f"UNKNOWN LED ACTION: {action}")
@@ -132,17 +164,17 @@ def main():
                 elif device == "FAN":
                     if action == "ON":
                         fan_on()
+                        fan_is_on = True
                         ack = build_message("ACK,FAN,ON")
                         ser.write((ack + "\n").encode())
                         ser.flush()
-                        print(f"TX: {ack}")
                         print("FAN ON")
                     elif action == "OFF":
                         fan_off()
+                        fan_is_on = False
                         ack = build_message("ACK,FAN,OFF")
                         ser.write((ack + "\n").encode())
                         ser.flush()
-                        print(f"TX: {ack}")
                         print("FAN OFF")
                     else:
                         print(f"UNKNOWN FAN ACTION: {action}")
@@ -164,4 +196,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        print("[Receiver B] FATAL: startup/runtime error", file=sys.stderr, flush=True)
+        traceback.print_exc()
+        sys.exit(1)
