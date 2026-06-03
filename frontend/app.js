@@ -53,7 +53,11 @@ const els = {
     authToastMessage: document.getElementById("auth-toast-message"), // 权限提示内容
 };
 
-const AUTH_TOKEN_KEY = "yl40iot_access_token";
+let authState = {
+    authenticated: false,
+    user: null,
+};
+localStorage.removeItem("yl40iot_access_token");
 let authToastTimer = null;
 
 // ------------------------------------------------------------
@@ -96,26 +100,16 @@ function syncSystemTheme(event) {
     applyTheme(event.matches ? "light" : "dark");
 }
 
-function getAuthToken() {
-    return localStorage.getItem(AUTH_TOKEN_KEY);
-}
-
-function setAuthToken(token) {
-    if (token) {
-        localStorage.setItem(AUTH_TOKEN_KEY, token);
-    } else {
-        localStorage.removeItem(AUTH_TOKEN_KEY);
-    }
+function setAuthState(authenticated, user = null) {
+    authState = {
+        authenticated: Boolean(authenticated),
+        user: authenticated ? user : null,
+    };
     updateAuthButton();
 }
 
-function getAuthHeaders() {
-    const token = getAuthToken();
-    return token ? { Authorization: `Bearer ${token}` } : {};
-}
-
 function isAuthenticated() {
-    return Boolean(getAuthToken());
+    return authState.authenticated;
 }
 
 function updateAuthButton() {
@@ -198,7 +192,7 @@ async function login(event) {
             return;
         }
 
-        setAuthToken(data.access_token);
+        setAuthState(true, data.user || null);
         closeLoginModal();
         flashAuthButton();
         showAuthToast("控制权限已登录", "现在可以控制 LED 与风扇", "success");
@@ -212,8 +206,7 @@ async function login(event) {
 }
 
 async function logout() {
-    const token = getAuthToken();
-    if (!token) {
+    if (!isAuthenticated()) {
         openLoginModal();
         return;
     }
@@ -221,36 +214,28 @@ async function logout() {
     try {
         await fetch("/api/auth/logout", {
             method: "POST",
-            headers: getAuthHeaders(),
         });
     } catch (err) {
-        // 即使后端退出失败，本地也清掉 token，避免继续误用旧凭证。
+        // 即使后端退出失败，本地也切回未登录，避免继续显示控制权限。
     }
-    // 登出只清理控制权限 token，不改变 LED/FAN 的硬件状态。
-    setAuthToken(null);
+    // 登出只清理控制权限 Cookie，不改变 LED/FAN 的硬件状态。
+    setAuthState(false);
     flashAuthButton();
     showAuthToast("控制权限已退出", "LED 与风扇状态保持不变", "success");
     addLog("控制权限已退出", "info");
 }
 
 async function syncAuthState() {
-    const token = getAuthToken();
-    if (!token) {
-        updateAuthButton();
-        return;
-    }
-
     try {
-        const response = await fetch("/api/auth/me", {
-            headers: getAuthHeaders(),
-        });
+        const response = await fetch("/api/auth/me");
         if (!response.ok) {
-            setAuthToken(null);
+            setAuthState(false);
         } else {
-            updateAuthButton();
+            const data = await response.json();
+            setAuthState(true, data.user || null);
         }
     } catch (err) {
-        updateAuthButton();
+        setAuthState(false);
     }
 }
 
@@ -469,12 +454,12 @@ async function toggleLed() {
     try {
         const response = await fetch("/api/led", {
             method: "POST",
-            headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ on: newState }),
         });
         const data = await response.json();
         if (response.status === 401 || response.status === 403) {
-            setAuthToken(null);
+            setAuthState(false);
             addLog(data.detail || "LED 控制需要重新登录", "error");
             els.ledSwitch.checked = !newState;
             openLoginModal();
@@ -554,12 +539,12 @@ async function toggleFan() {
     try {
         const response = await fetch("/api/fan", {
             method: "POST",
-            headers: { "Content-Type": "application/json", ...getAuthHeaders() },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ on: newState }),
         });
         const data = await response.json();
         if (response.status === 401 || response.status === 403) {
-            setAuthToken(null);
+            setAuthState(false);
             addLog(data.detail || "风扇控制需要重新登录", "error");
             els.fanSwitch.checked = !newState;
             openLoginModal();

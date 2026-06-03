@@ -9,12 +9,18 @@ It contains:
 - `backend/`：FastAPI backend (Python 3.11)
   - Reads YL-40 PCF8591 sensor data via I2C (temperature & light)
   - Sends LoRa commands to remote Raspberry Pi B for GPIO18 LED control and GPIO17 fan relay control
+  - Maintains in-process caches for sensor data and remote LED/FAN state
   - Tracks LoRa receiver availability with a background PING/PONG heartbeat
-  - API: `GET /sensor`, `GET /temp`, `GET /light`, `GET /led`, `POST /led`, `GET /fan`, `POST /fan`, `GET /lora/status`
-  - `lora.py`: LoRaNode class (serial comm, CRC, ACK retry logic, LED/FAN commands, heartbeat ping)
+  - Protects every LoRa serial read/write with one shared serial lock
+  - Requires login token auth for hardware write APIs
+  - API: `GET /sensor`, `GET /temp`, `GET /light`, `GET /led`, `POST /led`, `GET /fan`, `POST /fan`, `GET /lora/status`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`
+  - `lora.py`: LoRaNode class (serial comm, CRC, ACK retry logic, LED/FAN commands, heartbeat ping, device state query)
 - `frontend/`：Static HTML/CSS/JS IoT Dashboard
   - Dark tech theme with glassmorphism cards
   - Displays real-time sensor readings, LED switch, fan switch, LoRa status, and operation logs
+  - Shows a login modal only when hardware control permission is needed
+  - Stores the control token in `localStorage`
+  - Shows auth Toast feedback on login/logout
   - Responsive layout for both mobile and desktop
 - `nginx/`：Nginx reverse proxy config
   - Serves frontend static files
@@ -41,6 +47,7 @@ Before editing code:
 5. Then read files in `backend/`, `frontend/`, and `nginx/`.
 6. Make minimal changes.
 7. Do not rewrite the whole project unless explicitly requested.
+8. If the user says "其他不动", modify only the explicitly requested file(s).
 
 ## Hardware Dependencies
 
@@ -57,36 +64,57 @@ Before editing code:
 - Runs `receiver_b.py` directly (NOT inside Docker)
 - Controls GPIO18 LED locally
 - Controls GPIO17 fan relay locally
+- Maintains local LED/FAN state for `QUERY,STATE`
+- Normal heartbeat packets are mostly silent; only the first successful PING/PONG handshake should be logged
 - Uses same LoRa module setup (M0/M1 LOW, /dev/ttyS0)
 
-## Current Improvement Plan
+## Current Backend Behavior
 
-### Sensor Cache for Higher Concurrent Reads
+### Caches and Hardware I/O
 
-Goal: improve concurrent browser/user queries for sensor readings without making every HTTP request touch the I2C bus.
+- `GET /sensor`, `GET /temp`, and `GET /light` must read sensor cache only.
+- `GET /led`, `GET /fan`, and `GET /lora/status` must read cached state/status only.
+- User-triggered GET requests must not directly access GPIO, I2C, `ser.write()`, or `ser.readline()`.
+- A background thread may read PCF8591 sensor data every 1 second and update `sensor_cache`.
+- A background thread may query Raspberry Pi B every 1 second with LoRa `QUERY,STATE` and update LED/FAN state cache.
+- `POST /led` and `POST /fan` are the hardware write APIs. They require auth, use the shared serial lock, send LoRa commands, wait for ACK, then update cache.
+- If polling fails, keep serving the last known cached value with error/stale metadata instead of crashing the API.
 
-Recommended approach:
+### LoRa Protocol
 
-1. Add an in-process `sensor_cache` in the FastAPI backend.
-2. Start one background sensor polling thread on application startup.
-3. Poll PCF8591 at a fixed interval, for example 1 second.
-4. Store the latest temperature, light percentage, raw ADC values, timestamp, and error state in the cache.
-5. Protect cache reads/writes with a `threading.Lock`.
-6. Make `GET /sensor`, `GET /temp`, and `GET /light` return the latest cached value instead of reading I2C directly.
-7. Include metadata such as `cached: true`, `updated_at`, and optionally `age_ms` so the frontend can show stale data if needed.
-8. Keep LoRa control endpoints (`/led`, `/fan`, `/lora/status`) separate from the sensor cache.
+- Heartbeat:
+  - A -> B: `PING,<crc>`
+  - B -> A: `PONG,<crc>`
+- Hardware control:
+  - A -> B: `CMD,LED,ON|OFF,<crc>`
+  - A -> B: `CMD,FAN,ON|OFF,<crc>`
+  - B -> A: `ACK,LED,ON|OFF,<crc>` or `ACK,FAN,ON|OFF,<crc>`
+- Device state query:
+  - A -> B: `QUERY,STATE,<crc>`
+  - B -> A: `STATE,LED,ON|OFF,FAN,ON|OFF,<crc>`
 
-Expected benefit:
+### Auth
 
-- Many users can refresh `/sensor` at the same time while only one backend thread reads I2C.
-- Reduces I2C bus pressure and avoids repeated PCF8591 channel switching per request.
-- Makes API latency more stable because requests return memory data instead of waiting for hardware I/O.
+- SQLite database path on Raspberry Pi: `/home/pi/yl40iot.db`
+- Docker Compose mounts `/home/pi/yl40iot.db:/home/pi/yl40iot.db`.
+- Existing tables:
+  - `users(id, username, password_hash, role, is_active, created_at)`
+  - `auth_tokens(id, user_id, token_hash, client_ip, user_agent, expires_at, revoked, created_at)`
+- Frontend stores access token in `localStorage` under `yl40iot_access_token`.
+- Frontend sends hardware write requests with `Authorization: Bearer <token>`.
+- Logout revokes/clears token only; it must not change LED/FAN hardware state.
 
-Important constraints:
+## Planned Refactor
 
-- Keep the first implementation in-process; do not introduce Redis or a database unless multi-container backend replicas are added later.
-- If sensor polling fails, keep serving the last known value with an error/stale marker instead of crashing the API.
-- Make minimal changes and preserve the existing API response fields for frontend compatibility.
+When refactoring backend, do not split it too much. Keep the shape simple:
+
+- Keep `main.py` as the FastAPI app, route layer, CORS, Pydantic models, and SQLite auth.
+- Move sensor/I2C/cache/thread code into `backend/sensor.py`.
+- Move LoRa device orchestration into `backend/device.py`.
+- Heartbeat belongs in `device.py`.
+- Keep low-level serial protocol code in `backend/lora.py`.
+- Preserve API paths and Docker one-command deployment behavior.
+- Frontend refactor is separate and should not be mixed into this backend refactor unless explicitly requested.
 
 ## Ignore These Files
 

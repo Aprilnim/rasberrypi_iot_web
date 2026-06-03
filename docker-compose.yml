@@ -13,6 +13,9 @@ services:
     volumes:
       - /home/pi/yl40iot.db:/home/pi/yl40iot.db
 
+    environment:
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
+
     restart: unless-stopped
 
   nginx:

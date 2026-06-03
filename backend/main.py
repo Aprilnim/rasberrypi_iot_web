@@ -23,7 +23,7 @@
 # threading:     Python 多线程，用来启动后台心跳线程
 # time:          时间相关函数
 # ------------------------------------------------------------
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import hashlib
@@ -42,10 +42,19 @@ import time
 #   允许任意来源的前端页面调用本后端接口
 #   开发调试阶段开"*"，生产环境建议改成具体域名
 # ------------------------------------------------------------
-app = FastAPI()
+app = FastAPI(
+    docs_url=None,
+    redoc_url=None,
+    openapi_url=None
+)
+ALLOWED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -67,6 +76,8 @@ APP_START_TIME = time.time()
 # SQLite 鉴权数据库。树莓派部署时使用 /home/pi/yl40iot.db。
 AUTH_DB_PATH = os.environ.get("YL40IOT_DB_PATH", "/home/pi/yl40iot.db")
 AUTH_TOKEN_TTL_SECONDS = 24 * 60 * 60
+AUTH_COOKIE_NAME = "control_token"
+AUTH_COOKIE_PATH = "/api"
 
 # ============================================================
 # LoRa 模块初始化
@@ -180,11 +191,11 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
-def require_control_auth(authorization: str | None = Header(default=None)):
-    if not authorization or not authorization.startswith("Bearer "):
+def require_control_auth(control_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME)):
+    if not control_token:
         raise HTTPException(status_code=401, detail="请先登录后再控制硬件")
 
-    token = authorization.removeprefix("Bearer ").strip()
+    token = control_token.strip()
     if not token:
         raise HTTPException(status_code=401, detail="登录凭证无效")
 
@@ -530,10 +541,10 @@ def root():
 
 # ------------------------------------------------------------
 # POST /auth/login
-# 登录后签发控制硬件用的 Bearer token。
+# 登录后签发控制硬件用的 HttpOnly Cookie token。
 # ------------------------------------------------------------
 @app.post("/auth/login")
-def login(data: LoginRequest, request: Request):
+def login(data: LoginRequest, request: Request, response: Response):
     username = data.username.strip()
     if not username or not data.password:
         raise HTTPException(status_code=400, detail="用户名和密码不能为空")
@@ -582,9 +593,18 @@ def login(data: LoginRequest, request: Request):
         )
         conn.commit()
 
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        max_age=AUTH_TOKEN_TTL_SECONDS,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        path=AUTH_COOKIE_PATH,
+    )
+
     return {
-        "access_token": token,
-        "token_type": "Bearer",
+        "authenticated": True,
         "expires_in": AUTH_TOKEN_TTL_SECONDS,
         "user": {
             "username": user["username"],
@@ -598,19 +618,26 @@ def login(data: LoginRequest, request: Request):
 # 撤销当前 token。只退出控制权限，不改变 LED/FAN 硬件状态。
 # ------------------------------------------------------------
 @app.post("/auth/logout")
-def logout(user=Depends(require_control_auth)):
+def logout(response: Response, user=Depends(require_control_auth)):
     with get_auth_db() as conn:
         conn.execute(
             "UPDATE auth_tokens SET revoked = 1 WHERE token_hash = ?",
             (user["token_hash"],),
         )
         conn.commit()
+    response.delete_cookie(
+        key=AUTH_COOKIE_NAME,
+        path=AUTH_COOKIE_PATH,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+    )
     return {"ok": True}
 
 
 # ------------------------------------------------------------
 # GET /auth/me
-# 前端刷新页面后可用它检查 localStorage token 是否仍有效。
+# 前端刷新页面后可用它检查 HttpOnly Cookie token 是否仍有效。
 # ------------------------------------------------------------
 @app.get("/auth/me")
 def auth_me(user=Depends(require_control_auth)):
