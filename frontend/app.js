@@ -3,7 +3,7 @@
 // 功能：
 //   1. 每秒从后端获取温度/光照传感器数据并刷新显示
 //   2. 通过 LED 开关按钮控制树莓派 B 的 GPIO18 LED
-//   3. 通过风扇开关按钮控制树莓派 B 的 GPIO17 风扇继电器
+//   3. 通过风扇开关按钮控制树莓派 B 的 GPIO24 风扇继电器
 //   4. 每 3 秒查询一次 LoRa 心跳状态，判断树莓派 B 是否在线
 //   5. 操作日志记录（LED/风扇 开关、网络错误等）
 // ============================================================
@@ -35,6 +35,9 @@ const els = {
     uptime: document.getElementById("uptime"),       // 系统运行时长
     logList: document.getElementById("log-list"),    // 操作日志列表容器
     clearLog: document.getElementById("clear-log"),  // 清空日志按钮
+    auditLogList: document.getElementById("audit-log-list"), // 数据库审计日志列表
+    auditRefresh: document.getElementById("audit-refresh"), // 审计日志刷新按钮
+    auditHint: document.getElementById("audit-hint"), // 审计日志状态提示
     loraStatus: document.getElementById("lora-status"), // LoRa 连接状态行
     themeToggle: document.getElementById("theme-toggle"), // 深色/浅色主题切换按钮
     themeIcon: document.getElementById("theme-icon"), // 主题按钮图标
@@ -59,6 +62,12 @@ let authState = {
 };
 localStorage.removeItem("yl40iot_access_token");
 let authToastTimer = null;
+let ledControlPending = false;
+let fanControlPending = false;
+let sensorPolling = false;
+let uptimePolling = false;
+let loraPolling = false;
+let deviceStatesPolling = false;
 
 // ------------------------------------------------------------
 // 主题模式：手动优先 + 系统默认
@@ -106,6 +115,9 @@ function setAuthState(authenticated, user = null) {
         user: authenticated ? user : null,
     };
     updateAuthButton();
+    if (!authenticated) {
+        renderAuditLoggedOut();
+    }
 }
 
 function isAuthenticated() {
@@ -197,6 +209,7 @@ async function login(event) {
         flashAuthButton();
         showAuthToast("控制权限已登录", "现在可以控制 LED 与风扇", "success");
         addLog("控制权限登录成功", "info");
+        updateAuditLogs();
     } catch (err) {
         showLoginError("登录失败：网络错误");
     } finally {
@@ -228,11 +241,19 @@ async function logout() {
 async function syncAuthState() {
     try {
         const response = await fetch("/api/auth/me");
-        if (!response.ok) {
+
+        if (response.status === 401) {
             setAuthState(false);
+            return;
+        }
+
+        const data = await response.json();
+
+        if (response.ok && data.authenticated) {
+            setAuthState(true, data.user);
+            updateAuditLogs();
         } else {
-            const data = await response.json();
-            setAuthState(true, data.user || null);
+            setAuthState(false);
         }
     } catch (err) {
         setAuthState(false);
@@ -268,6 +289,104 @@ function addLog(message, type = "info") {
     }
 }
 
+function setAuditHint(message) {
+    if (els.auditHint) {
+        els.auditHint.innerText = message;
+    }
+}
+
+function renderAuditMessage(message) {
+    if (!els.auditLogList) return;
+    els.auditLogList.innerHTML = "";
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 7;
+    cell.className = "audit-empty";
+    cell.textContent = message;
+    row.appendChild(cell);
+    els.auditLogList.appendChild(row);
+}
+
+function renderAuditLoggedOut() {
+    setAuditHint("登录后查看控制审计记录");
+    renderAuditMessage("登录后查看控制审计记录");
+}
+
+function createAuditCell(text, className = "") {
+    const cell = document.createElement("td");
+    if (className) {
+        cell.className = className;
+    }
+    cell.textContent = text || "--";
+    return cell;
+}
+
+function createAuditBadge(text, type) {
+    const badge = document.createElement("span");
+    badge.className = `audit-badge ${type}`;
+    badge.textContent = text || "--";
+    return badge;
+}
+
+function renderAuditLogs(logs) {
+    if (!els.auditLogList) return;
+    els.auditLogList.innerHTML = "";
+
+    if (!logs.length) {
+        setAuditHint("暂无控制审计记录");
+        renderAuditMessage("暂无控制审计记录");
+        return;
+    }
+
+    setAuditHint(`最近 ${logs.length} 条控制记录`);
+
+    logs.forEach((item) => {
+        const row = document.createElement("tr");
+        row.appendChild(createAuditCell(item.created_time || "--", "audit-time"));
+        row.appendChild(createAuditCell(item.username || "--"));
+
+        const deviceCell = document.createElement("td");
+        deviceCell.appendChild(createAuditBadge(item.device, "device"));
+        row.appendChild(deviceCell);
+
+        const actionCell = document.createElement("td");
+        actionCell.appendChild(createAuditBadge(item.action, "action"));
+        row.appendChild(actionCell);
+
+        const resultCell = document.createElement("td");
+        const resultType = item.result === "SUCCESS" ? "success" : "failed";
+        resultCell.appendChild(createAuditBadge(item.result, resultType));
+        row.appendChild(resultCell);
+
+        row.appendChild(createAuditCell(item.client_ip || "--"));
+        row.appendChild(createAuditCell(item.error || "--", item.error ? "audit-error-text" : ""));
+        els.auditLogList.appendChild(row);
+    });
+}
+
+async function updateAuditLogs() {
+    if (!isAuthenticated()) {
+        renderAuditLoggedOut();
+        return;
+    }
+
+    try {
+        const response = await fetch("/api/control/logs?limit=50");
+        if (response.status === 401 || response.status === 403) {
+            setAuthState(false);
+            return;
+        }
+        const data = await response.json();
+        if (!response.ok) {
+            renderAuditMessage(data.detail || "审计记录读取失败");
+            return;
+        }
+        renderAuditLogs(data.logs || []);
+    } catch (err) {
+        renderAuditMessage("审计记录读取失败：网络错误");
+    }
+}
+
 // ------------------------------------------------------------
 // updateLastTime(type)
 // 记录 LED 或风扇的最近操作时间，显示在控制卡片中
@@ -295,6 +414,9 @@ function updateLastTime(type) {
 // ------------------------------------------------------------
 async function updateUptimeFromBackend() {
     if (!els.uptime) return;
+    if (uptimePolling) return;
+
+    uptimePolling = true;
     try {
         const response = await fetch("/api/uptime");
         const data = await response.json();
@@ -303,6 +425,8 @@ async function updateUptimeFromBackend() {
         }
     } catch (err) {
         // 请求失败时静默处理，保留上一次显示
+    } finally {
+        uptimePolling = false;
     }
 }
 
@@ -375,6 +499,9 @@ function setLoraOnline(online) {
 // 这个函数每秒调用一次（见页面底部 setInterval）
 // ------------------------------------------------------------
 async function updateSensor() {
+    if (sensorPolling) return;
+
+    sensorPolling = true;
     try {
         const response = await fetch("/api/sensor");
         const data = await response.json();
@@ -386,6 +513,8 @@ async function updateSensor() {
         }
     } catch (err) {
         setBackendOnline(false);
+    } finally {
+        sensorPolling = false;
     }
 }
 
@@ -410,14 +539,16 @@ function updateLedVisual(isOn) {
 
 // ------------------------------------------------------------
 // updateLed()
-// 页面刚加载时，获取一次 LED 的当前状态
+// 从后端缓存同步 LED 当前状态
 // 请求路径：/api/led（GET 方式）
 // 后端返回：{ "on": true/false, "available": true/false }
 // 如果 available 为 false（比如 LoRa 模块初始化失败），显示"不可用"
 // 否则同步滑动开关位置和灯泡视觉效果
-// 这个函数只在页面加载时调用一次（见底部）
+// 当本浏览器正在发控制请求时跳过，避免轮询覆盖用户刚点击的开关
 // ------------------------------------------------------------
 async function updateLed() {
+    if (ledControlPending) return;
+
     try {
         const response = await fetch("/api/led");
         const data = await response.json();
@@ -451,6 +582,7 @@ async function toggleLed() {
         return;
     }
 
+    ledControlPending = true;
     try {
         const response = await fetch("/api/led", {
             method: "POST",
@@ -463,17 +595,25 @@ async function toggleLed() {
             addLog(data.detail || "LED 控制需要重新登录", "error");
             els.ledSwitch.checked = !newState;
             openLoginModal();
+        } else if (data.error) {
+            addLog(`LED 控制失败：${data.error}`, "error");
+            els.ledSwitch.checked = !newState;
+            updateAuditLogs();
         } else if (data.available) {
             updateLedVisual(data.on);
             addLog(`LED 已${data.on ? "开启" : "关闭"}`, "action");
             updateLastTime("led");
+            updateAuditLogs();
         } else {
             addLog("LED 控制失败：硬件不可用", "error");
             els.ledSwitch.checked = !newState;
+            updateAuditLogs();
         }
     } catch (err) {
         addLog("LED 控制失败：网络错误", "error");
         els.ledSwitch.checked = !newState;
+    } finally {
+        ledControlPending = false;
     }
 }
 
@@ -498,13 +638,16 @@ function updateFanVisual(isOn) {
 
 // ------------------------------------------------------------
 // updateFan()
-// 页面刚加载时，获取一次风扇的当前状态
+// 从后端缓存同步风扇当前状态
 // 请求路径：/api/fan（GET 方式）
 // 后端返回：{ "on": true/false, "available": true/false }
 // 如果 available 为 false，显示"不可用"
 // 否则同步滑动开关位置和风扇视觉效果
+// 当本浏览器正在发控制请求时跳过，避免轮询覆盖用户刚点击的开关
 // ------------------------------------------------------------
 async function updateFan() {
+    if (fanControlPending) return;
+
     try {
         const response = await fetch("/api/fan");
         const data = await response.json();
@@ -536,6 +679,7 @@ async function toggleFan() {
         return;
     }
 
+    fanControlPending = true;
     try {
         const response = await fetch("/api/fan", {
             method: "POST",
@@ -548,17 +692,42 @@ async function toggleFan() {
             addLog(data.detail || "风扇控制需要重新登录", "error");
             els.fanSwitch.checked = !newState;
             openLoginModal();
+        } else if (data.error) {
+            addLog(`风扇控制失败：${data.error}`, "error");
+            els.fanSwitch.checked = !newState;
+            updateAuditLogs();
         } else if (data.available) {
             updateFanVisual(data.on);
             addLog(`风扇已${data.on ? "开启" : "关闭"}`, "action");
             updateLastTime("fan");
+            updateAuditLogs();
         } else {
             addLog("风扇控制失败：硬件不可用", "error");
             els.fanSwitch.checked = !newState;
+            updateAuditLogs();
         }
     } catch (err) {
         addLog("风扇控制失败：网络错误", "error");
         els.fanSwitch.checked = !newState;
+    } finally {
+        fanControlPending = false;
+    }
+}
+
+// ------------------------------------------------------------
+// updateDeviceStates()
+// 周期性同步 LED/FAN 状态。后端 GET 只读缓存，不直接访问串口，
+// 所以多个浏览器同时打开时可以用它同步别人刚完成的硬件操作。
+// 如果上一轮设备状态同步还没结束，跳过本轮，避免慢网络下请求堆积。
+// ------------------------------------------------------------
+async function updateDeviceStates() {
+    if (deviceStatesPolling) return;
+
+    deviceStatesPolling = true;
+    try {
+        await Promise.all([updateLed(), updateFan()]);
+    } finally {
+        deviceStatesPolling = false;
     }
 }
 
@@ -575,6 +744,9 @@ async function toggleFan() {
 // 如果请求本身失败（fetch 抛异常），把后端和 LoRa 都标记为离线
 // ------------------------------------------------------------
 async function updateLoraStatus() {
+    if (loraPolling) return;
+
+    loraPolling = true;
     try {
         const response = await fetch("/api/lora/status");
         const data = await response.json();
@@ -585,6 +757,8 @@ async function updateLoraStatus() {
     } catch (err) {
         setLoraOnline(false);
         setBackendOnline(false);
+    } finally {
+        loraPolling = false;
     }
 }
 
@@ -620,6 +794,7 @@ els.clearLog.addEventListener("click", () => {
     els.logList.innerHTML = "";
     addLog("日志已清空", "info");
 });
+els.auditRefresh.addEventListener("click", updateAuditLogs);
 themeQuery.addEventListener("change", syncSystemTheme);
 
 // ------------------------------------------------------------
@@ -628,19 +803,20 @@ themeQuery.addEventListener("change", syncSystemTheme);
 // 1. 记录系统启动日志
 // 2. 立即获取一次传感器数据
 // 3. 启动定时器，每秒自动刷新传感器
-// 4. 立即获取一次 LED 当前状态
-// 5. 立即获取一次风扇当前状态
+// 4. 立即获取一次 LED/FAN 当前状态
+// 5. 每 2 秒从后端缓存同步 LED/FAN 状态，支持多浏览器状态一致
 // 6. 立即获取一次 LoRa 连接状态
 // 7. 启动定时器，每 3 秒自动刷新 LoRa 状态
 // 8. 启动定时器，每秒刷新系统运行时长
 // ------------------------------------------------------------
 applyTheme(getPreferredTheme());
 syncAuthState();
+renderAuditLoggedOut();
 addLog("系统初始化完成，开始连接设备...", "info");
 updateSensor();
 setInterval(updateSensor, 1000);
-updateLed();
-updateFan();
+updateDeviceStates();
+setInterval(updateDeviceStates, 2000);
 updateLoraStatus();
 setInterval(updateLoraStatus, 3000);
 updateUptimeFromBackend();

@@ -2,7 +2,7 @@
 """
 树莓派B LoRa 接收端脚本
 接收 CMD,LED,ON/OFF 命令，控制 GPIO18 LED，并返回 ACK
-接收 CMD,FAN,ON/OFF 命令，控制 GPIO17 风扇继电器，并返回 ACK
+接收 CMD,FAN,ON/OFF 命令，控制 GPIO24 风扇继电器，并返回 ACK
 接收 PING 命令，返回 PONG
 """
 
@@ -24,7 +24,7 @@ BAUDRATE = 9600
 M0 = 22
 M1 = 27
 LED_PIN = 18
-FAN_PIN = 17
+FAN_PIN = 24
 
 
 def calc_crc(payload: str) -> int:
@@ -52,22 +52,24 @@ def verify_crc(message: str) -> Tuple[bool, str]:
 
 
 def fan_on():
-    """开风扇：设为输出 HIGH
+    """开风扇：设为输出 LOW
 
-    风扇继电器 IN 接 GPIO17，实测 HIGH 时风扇转。
+    风扇继电器 IN 接 GPIO24，模块需要 5V 高电平条件，
+    但树莓派 GPIO 只能输出 3.3V；实测用 GPIO24 拉低可触发风扇打开。
     """
     GPIO.setup(FAN_PIN, GPIO.OUT)
-    GPIO.output(FAN_PIN, GPIO.HIGH)
+    GPIO.output(FAN_PIN, GPIO.LOW)
 
 
 def fan_off():
-    """关风扇：设为输入（悬空），不能用 LOW
+    """关风扇：释放引脚为输入（悬空）
 
-    实测该继电器模块 GPIO LOW 也会触发风扇转，
-    只有输入/悬空状态才能停止风扇。
+    对这个继电器模块，GPIO HIGH 不是可靠的 5V 关闭信号，
+    GPIO LOW 又会触发风扇打开；输入悬空状态用于停止风扇。
     """
     GPIO.setup(FAN_PIN, GPIO.IN)
-
+    time.sleep(0.5) # 确保继电器有时间响应
+    
 
 def main():
     print("[Receiver B] Starting...", flush=True)
@@ -81,12 +83,6 @@ def main():
     GPIO.output(M1, GPIO.LOW)
     GPIO.output(LED_PIN, GPIO.LOW)
     # 风扇默认关闭（输入模式 = 悬空 = 风扇停）
-    GPIO.setup(FAN_PIN, GPIO.OUT)
-    GPIO.output(FAN_PIN, GPIO.LOW)
-    time.sleep(0.2)
-    GPIO.output(FAN_PIN, GPIO.HIGH)
-    time.sleep(0.2)
-    
     fan_off()
     time.sleep(1)
     print("[Receiver B] GPIO initialized", flush=True)

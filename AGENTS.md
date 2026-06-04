@@ -8,7 +8,7 @@ It contains:
 
 - `backend/`：FastAPI backend (Python 3.11)
   - Reads YL-40 PCF8591 sensor data via I2C (temperature & light)
-  - Sends LoRa commands to remote Raspberry Pi B for GPIO18 LED control and GPIO17 fan relay control
+  - Sends LoRa commands to remote Raspberry Pi B for GPIO18 LED control and GPIO24 fan relay control
   - Maintains in-process caches for sensor data and remote LED/FAN state
   - Tracks LoRa receiver availability with a background PING/PONG heartbeat
   - Protects every LoRa serial read/write with one shared serial lock
@@ -19,7 +19,7 @@ It contains:
   - Dark tech theme with glassmorphism cards
   - Displays real-time sensor readings, LED switch, fan switch, LoRa status, and operation logs
   - Shows a login modal only when hardware control permission is needed
-  - Stores the control token in `localStorage`
+  - Uses `HttpOnly + Secure + SameSite=Lax` cookie auth for control permission
   - Shows auth Toast feedback on login/logout
   - Responsive layout for both mobile and desktop
 - `nginx/`：Nginx reverse proxy config
@@ -31,7 +31,7 @@ It contains:
 Target device:
 
 - Raspberry Pi A (runs Docker backend + nginx + LoRa transmitter)
-- Raspberry Pi B (runs `receiver_b.py` + LoRa receiver + GPIO18 LED + GPIO17 fan relay)
+- Raspberry Pi B (runs `receiver_b.py` + LoRa receiver + GPIO18 LED + GPIO24 fan relay)
 - Linux / Debian
 - Docker Compose
 - Requires I2C (`/dev/i2c-1`), serial (`/dev/ttyS0`), and GPIO access
@@ -48,6 +48,8 @@ Before editing code:
 6. Make minimal changes.
 7. Do not rewrite the whole project unless explicitly requested.
 8. If the user says "其他不动", modify only the explicitly requested file(s).
+9. For small frontend visual elements such as the fan icon, prefer reference-driven edits over freeform redesign.
+10. If a fan icon redesign is requested, keep it simple and elegant: gray circular base, compact centered symbol, and avoid over-detailed pseudo-hardware decoration unless the user explicitly asks for it.
 
 ## Hardware Dependencies
 
@@ -63,7 +65,7 @@ Before editing code:
 ### Raspberry Pi B (receiver)
 - Runs `receiver_b.py` directly (NOT inside Docker)
 - Controls GPIO18 LED locally
-- Controls GPIO17 fan relay locally
+- Controls GPIO24 fan relay locally
 - Maintains local LED/FAN state for `QUERY,STATE`
 - Normal heartbeat packets are mostly silent; only the first successful PING/PONG handshake should be logged
 - Uses same LoRa module setup (M0/M1 LOW, /dev/ttyS0)
@@ -100,8 +102,9 @@ Before editing code:
 - Existing tables:
   - `users(id, username, password_hash, role, is_active, created_at)`
   - `auth_tokens(id, user_id, token_hash, client_ip, user_agent, expires_at, revoked, created_at)`
-- Frontend stores access token in `localStorage` under `yl40iot_access_token`.
-- Frontend sends hardware write requests with `Authorization: Bearer <token>`.
+- Frontend does not store the control token in `localStorage`.
+- Login sets `control_token` as an `HttpOnly + Secure + SameSite=Lax` cookie on `/api`.
+- Browser automatically carries the cookie to authenticated write APIs.
 - Logout revokes/clears token only; it must not change LED/FAN hardware state.
 
 ## Planned Refactor

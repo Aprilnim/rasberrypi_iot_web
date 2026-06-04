@@ -96,12 +96,12 @@
                 <div class="control-panel">
                     <div class="control-visual">
                         <div class="fan-glow" id="fan-glow"></div>
-                        <div class="fan-icon" id="fan-bulb">🌀</div>
+                        <div class="fan-icon" id="fan-bulb">❄️</div>
                     </div>
                     <div class="control-info">
                         <div class="control-state-row">
                             <span class="control-state" id="fan-status">--</span>
-                            <span class="control-pin">GPIO 17</span>
+                            <span class="control-pin">GPIO 24</span>
                         </div>
                         <div class="control-meta">
                             最近操作：<span id="fan-last-time">--</span>
@@ -194,6 +194,36 @@
                     <button class="clear-btn" id="clear-log">清空</button>
                 </div>
                 <div class="log-list" id="log-list"></div>
+            </section>
+
+            <section class="card audit-card">
+                <div class="card-header">
+                    <div>
+                        <h2>审计记录</h2>
+                        <p class="audit-subtitle" id="audit-hint">登录后查看控制审计记录</p>
+                    </div>
+                    <button class="clear-btn" id="audit-refresh" type="button">刷新</button>
+                </div>
+                <div class="audit-table-wrap">
+                    <table class="audit-table">
+                        <thead>
+                            <tr>
+                                <th>时间</th>
+                                <th>用户</th>
+                                <th>设备</th>
+                                <th>动作</th>
+                                <th>结果</th>
+                                <th>来源 IP</th>
+                                <th>错误</th>
+                            </tr>
+                        </thead>
+                        <tbody id="audit-log-list">
+                            <tr>
+                                <td colspan="7" class="audit-empty">登录后查看控制审计记录</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
             </section>
         </main>
     </div>

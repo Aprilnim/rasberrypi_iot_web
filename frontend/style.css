@@ -414,19 +414,19 @@ body {
     border-radius: 50%;
     background: var(--control-bg);
     border: 2px solid var(--control-border);
-    font-size: 22px;
+    font-size: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.4s ease;
     z-index: 2;
     user-select: none;
+    transition: all 0.35s ease;
 }
 
 .fan-icon.on {
-    background: var(--success-strong);
-    border-color: var(--success);
-    box-shadow: 0 0 20px var(--success-strong), 0 0 40px var(--success-glow);
+    background: rgba(59, 130, 246, 0.1);
+    border-color: rgba(96, 165, 250, 0.66);
+    box-shadow: 0 0 16px rgba(59, 130, 246, 0.38), 0 0 28px rgba(79, 70, 229, 0.14);
     animation: fanSpin 0.6s linear infinite;
 }
 
@@ -448,7 +448,7 @@ body {
 .fan-glow.on {
     width: 72px;
     height: 72px;
-    background: var(--success-glow-soft);
+    background: var(--accent-glow-soft);
     filter: blur(14px);
 }
 
@@ -691,6 +691,112 @@ input:disabled + .slider:before {
     background: var(--error-soft);
     border-color: var(--error-hover-border);
     color: var(--error);
+}
+
+/* ========== Audit Log ========== */
+.audit-card {
+    grid-column: 1 / -1;
+}
+
+.audit-subtitle {
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 12px;
+    letter-spacing: 0;
+}
+
+.audit-table-wrap {
+    max-height: 280px;
+    overflow: auto;
+    border: 1px solid var(--border-soft);
+    border-radius: 10px;
+    background: var(--panel-bg-soft);
+}
+
+.audit-table {
+    width: 100%;
+    min-width: 860px;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.audit-table th,
+.audit-table td {
+    padding: 11px 12px;
+    border-bottom: 1px solid var(--border-soft);
+    text-align: left;
+    vertical-align: middle;
+}
+
+.audit-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--panel-bg);
+    color: var(--text-muted);
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}
+
+.audit-table tr:last-child td {
+    border-bottom: none;
+}
+
+.audit-table td {
+    color: var(--text-soft);
+}
+
+.audit-time {
+    color: var(--text-main) !important;
+    font-family: "SF Mono", Monaco, "Cascadia Code", monospace;
+    white-space: nowrap;
+}
+
+.audit-empty {
+    padding: 22px 12px !important;
+    text-align: center !important;
+    color: var(--text-muted) !important;
+}
+
+.audit-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border-mid);
+    background: var(--button-bg);
+    color: var(--text-soft);
+    font-size: 11px;
+    font-weight: 800;
+    line-height: 1.2;
+}
+
+.audit-badge.device,
+.audit-badge.action {
+    border-color: var(--accent-border);
+    background: var(--accent-soft);
+    color: var(--accent);
+}
+
+.audit-badge.success {
+    border-color: var(--success-border);
+    background: var(--success-soft);
+    color: var(--success);
+}
+
+.audit-badge.failed {
+    border-color: var(--error-border);
+    background: var(--error-soft);
+    color: var(--error);
+}
+
+.audit-error-text {
+    color: var(--error) !important;
+    max-width: 260px;
 }
 
 /* ========== Login Modal ========== */

@@ -10,7 +10,7 @@
 # 数据流：
 #   前端(浏览器) ──HTTP──► 树莓派A后端 ──LoRa──► 树莓派B(receiver_b.py)
 #                                                ├── GPIO18 LED
-#                                                └── GPIO17 风扇继电器
+#                                                └── GPIO24 风扇继电器
 # ============================================================
 
 # ------------------------------------------------------------
@@ -23,7 +23,7 @@
 # threading:     Python 多线程，用来启动后台心跳线程
 # time:          时间相关函数
 # ------------------------------------------------------------
-from fastapi import Cookie, Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import hashlib
@@ -35,6 +35,7 @@ import secrets
 import sqlite3
 import threading
 import time
+from urllib.parse import urlparse
 
 # ------------------------------------------------------------
 # 创建 FastAPI 应用实例
@@ -78,6 +79,13 @@ AUTH_DB_PATH = os.environ.get("YL40IOT_DB_PATH", "/home/pi/yl40iot.db")
 AUTH_TOKEN_TTL_SECONDS = 24 * 60 * 60
 AUTH_COOKIE_NAME = "control_token"
 AUTH_COOKIE_PATH = "/api"
+
+# 登录失败限流只放内存里：当前项目是单后端容器，简单可靠，也不需要改数据库。
+LOGIN_RATE_WINDOW_SECONDS = 60
+LOGIN_MAX_FAILURES = 5
+login_rate_lock = threading.Lock()
+login_failures_by_ip = {}
+login_failures_by_username = {}
 
 # ============================================================
 # LoRa 模块初始化
@@ -191,6 +199,85 @@ def get_client_ip(request: Request) -> str:
     return request.client.host if request.client else ""
 
 
+def _trim_login_failures(entries: list[float], now: float) -> list[float]:
+    return [ts for ts in entries if now - ts < LOGIN_RATE_WINDOW_SECONDS]
+
+
+def check_login_rate_limit(client_ip: str, username: str):
+    """登录失败限流：挡暴力猜密码，不记录密码和 token。"""
+    now = time.time()
+    normalized_username = username.lower()
+
+    with login_rate_lock:
+        ip_entries = _trim_login_failures(login_failures_by_ip.get(client_ip, []), now)
+        user_entries = _trim_login_failures(
+            login_failures_by_username.get(normalized_username, []),
+            now,
+        )
+        login_failures_by_ip[client_ip] = ip_entries
+        login_failures_by_username[normalized_username] = user_entries
+
+        if len(ip_entries) >= LOGIN_MAX_FAILURES or len(user_entries) >= LOGIN_MAX_FAILURES:
+            raise HTTPException(status_code=429, detail="登录失败次数过多，请稍后再试")
+
+
+def record_login_failure(client_ip: str, username: str):
+    """只记录失败次数，用于限流；敏感信息不要进日志或内存结构。"""
+    now = time.time()
+    normalized_username = username.lower()
+
+    with login_rate_lock:
+        login_failures_by_ip[client_ip] = _trim_login_failures(
+            login_failures_by_ip.get(client_ip, []),
+            now,
+        ) + [now]
+        login_failures_by_username[normalized_username] = _trim_login_failures(
+            login_failures_by_username.get(normalized_username, []),
+            now,
+        ) + [now]
+
+
+def clear_login_failures(client_ip: str, username: str):
+    """登录成功后清空失败记录，避免用户输对后仍被旧失败次数影响。"""
+    normalized_username = username.lower()
+
+    with login_rate_lock:
+        login_failures_by_ip.pop(client_ip, None)
+        login_failures_by_username.pop(normalized_username, None)
+
+
+def get_url_origin(url: str | None) -> str | None:
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def get_request_origin(request: Request) -> str:
+    return f"{request.url.scheme}://{request.url.netloc}"
+
+
+def require_allowed_origin(request: Request):
+    """写接口来源校验：Cookie 会自动携带，所以要补一道 CSRF 防线。"""
+    origin = request.headers.get("Origin")
+    referer_origin = get_url_origin(request.headers.get("Referer"))
+
+    # curl 或硬件调试工具常常不带这两个头；仍然要求 Cookie 鉴权通过。
+    if not origin and not referer_origin:
+        return
+
+    allowed_origins = set(ALLOWED_ORIGINS)
+    request_origin = get_request_origin(request)
+    candidate_origin = origin or referer_origin
+
+    if candidate_origin in allowed_origins or candidate_origin == request_origin:
+        return
+
+    raise HTTPException(status_code=403, detail="请求来源不被允许")
+
+
 def require_control_auth(control_token: str | None = Cookie(default=None, alias=AUTH_COOKIE_NAME)):
     if not control_token:
         raise HTTPException(status_code=401, detail="请先登录后再控制硬件")
@@ -233,6 +320,47 @@ def require_control_auth(control_token: str | None = Cookie(default=None, alias=
         "role": row["role"],
         "token_hash": token_hash,
     }
+
+
+def write_control_log(
+    user: dict,
+    request: Request,
+    device: str,
+    action: str,
+    result: str,
+    error: str | None = None,
+):
+    """记录硬件写操作审计日志；日志失败不能反过来影响硬件控制。"""
+    try:
+        with get_auth_db() as conn:
+            conn.execute(
+                """
+                INSERT INTO control_logs (
+                    user_id,
+                    username,
+                    device,
+                    action,
+                    result,
+                    client_ip,
+                    error,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    user["id"],
+                    user["username"],
+                    device,
+                    action,
+                    result,
+                    get_client_ip(request),
+                    error,
+                    int(time.time()),
+                ),
+            )
+            conn.commit()
+    except Exception as e:
+        print(f"[Audit] Failed to write control log: {e}")
 
 
 # ============================================================
@@ -549,6 +677,9 @@ def login(data: LoginRequest, request: Request, response: Response):
     if not username or not data.password:
         raise HTTPException(status_code=400, detail="用户名和密码不能为空")
 
+    client_ip = get_client_ip(request)
+    check_login_rate_limit(client_ip, username)
+
     now = int(time.time())
     with get_auth_db() as conn:
         user = conn.execute(
@@ -561,6 +692,7 @@ def login(data: LoginRequest, request: Request, response: Response):
         ).fetchone()
 
         if user is None or not verify_password(data.password, user["password_hash"]):
+            record_login_failure(client_ip, username)
             raise HTTPException(status_code=401, detail="用户名或密码错误")
         if not user["is_active"]:
             raise HTTPException(status_code=403, detail="用户已禁用")
@@ -585,13 +717,15 @@ def login(data: LoginRequest, request: Request, response: Response):
             (
                 user["id"],
                 token_hash,
-                get_client_ip(request),
+                client_ip,
                 request.headers.get("User-Agent", ""),
                 expires_at,
                 now,
             ),
         )
         conn.commit()
+
+    clear_login_failures(client_ip, username)
 
     response.set_cookie(
         key=AUTH_COOKIE_NAME,
@@ -618,7 +752,11 @@ def login(data: LoginRequest, request: Request, response: Response):
 # 撤销当前 token。只退出控制权限，不改变 LED/FAN 硬件状态。
 # ------------------------------------------------------------
 @app.post("/auth/logout")
-def logout(response: Response, user=Depends(require_control_auth)):
+def logout(
+    response: Response,
+    user=Depends(require_control_auth),
+    _origin_ok=Depends(require_allowed_origin),
+):
     with get_auth_db() as conn:
         conn.execute(
             "UPDATE auth_tokens SET revoked = 1 WHERE token_hash = ?",
@@ -648,6 +786,57 @@ def auth_me(user=Depends(require_control_auth)):
             "role": user["role"],
         },
     }
+
+
+# ------------------------------------------------------------
+# GET /control/logs
+# 查询数据库审计日志。这里只读 SQLite，不访问任何硬件 I/O。
+# ------------------------------------------------------------
+@app.get("/control/logs")
+def get_control_logs(
+    limit: int = Query(default=50, ge=1, le=200),
+    user=Depends(require_control_auth),
+):
+    with get_auth_db() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                id,
+                username,
+                device,
+                action,
+                result,
+                client_ip,
+                error,
+                created_at
+            FROM control_logs
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+
+    logs = []
+    for row in rows:
+        created_at = row["created_at"]
+        logs.append(
+            {
+                "id": row["id"],
+                "username": row["username"],
+                "device": row["device"],
+                "action": row["action"],
+                "result": row["result"],
+                "client_ip": row["client_ip"],
+                "error": row["error"],
+                "created_at": created_at,
+                "created_time": time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(created_at),
+                ),
+            }
+        )
+
+    return {"logs": logs, "limit": limit}
 
 
 # ------------------------------------------------------------
@@ -762,16 +951,45 @@ def get_led():
 #   5. 没收到 ACK → 返回当前 LED 状态 + 错误信息
 # ------------------------------------------------------------
 @app.post("/led")
-def set_led(state: LedState, user=Depends(require_control_auth)):
+def set_led(
+    request: Request,
+    state: LedState,
+    user=Depends(require_control_auth),
+    _origin_ok=Depends(require_allowed_origin),
+):
+    action = "ON" if state.on else "OFF"
+
     if lora is None or not lora.available:
+        write_control_log(
+            user=user,
+            request=request,
+            device="LED",
+            action=action,
+            result="FAILED",
+            error="LoRa not available",
+        )
         return {"on": False, "available": False, "error": "LoRa not available"}
 
-    action = "ON" if state.on else "OFF"
     result = lora.send_command(action)
 
     if result["success"]:
+        write_control_log(
+            user=user,
+            request=request,
+            device="LED",
+            action=action,
+            result="SUCCESS",
+        )
         return {"on": state.on, "available": True}
     else:
+        write_control_log(
+            user=user,
+            request=request,
+            device="LED",
+            action=action,
+            result="FAILED",
+            error=result["message"],
+        )
         cached_state = lora.get_device_state_snapshot()
         return {"on": cached_state["led_on"], "available": True, "error": result["message"]}
 
@@ -806,20 +1024,49 @@ def get_fan():
 #
 # 工作流程与 /led 相同，只是调用 lora.send_fan_command()
 # 内部发送 CMD,FAN,ON,<crc> 或 CMD,FAN,OFF,<crc>
-# 树莓派 B 收到后通过 GPIO17 控制继电器
+# 树莓派 B 收到后通过 GPIO24 控制继电器
 # 注意：树莓派 B 关风扇用的是 GPIO.setup(IN) 而不是 LOW
 # ------------------------------------------------------------
 @app.post("/fan")
-def set_fan(state: FanState, user=Depends(require_control_auth)):
+def set_fan(
+    request: Request,
+    state: FanState,
+    user=Depends(require_control_auth),
+    _origin_ok=Depends(require_allowed_origin),
+):
+    action = "ON" if state.on else "OFF"
+
     if lora is None or not lora.available:
+        write_control_log(
+            user=user,
+            request=request,
+            device="FAN",
+            action=action,
+            result="FAILED",
+            error="LoRa not available",
+        )
         return {"on": False, "available": False, "error": "LoRa not available"}
 
-    action = "ON" if state.on else "OFF"
     result = lora.send_fan_command(action)
 
     if result["success"]:
+        write_control_log(
+            user=user,
+            request=request,
+            device="FAN",
+            action=action,
+            result="SUCCESS",
+        )
         return {"on": state.on, "available": True}
     else:
+        write_control_log(
+            user=user,
+            request=request,
+            device="FAN",
+            action=action,
+            result="FAILED",
+            error=result["message"],
+        )
         cached_state = lora.get_device_state_snapshot()
         return {"on": cached_state["fan_on"], "available": True, "error": result["message"]}
 
