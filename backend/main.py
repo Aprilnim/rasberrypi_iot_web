@@ -255,13 +255,23 @@ def get_url_origin(url: str | None) -> str | None:
     return f"{parsed.scheme}://{parsed.netloc}"
 
 
+def get_forwarded_host(request: Request) -> str:
+    """代理后面的真实 Host：用于判断 Cloudflare 入口是否和网页同源。"""
+    forwarded_host = request.headers.get("X-Forwarded-Host")
+    host = forwarded_host or request.headers.get("Host") or request.url.netloc
+    return host.split(",", 1)[0].strip()
+
+
 def get_request_origin(request: Request) -> str:
-    return f"{request.url.scheme}://{request.url.netloc}"
+    """还原用户访问 API 的外部 origin，避免把 Docker 内部地址当成来源。"""
+    forwarded_proto = request.headers.get("X-Forwarded-Proto")
+    proto = forwarded_proto.split(",", 1)[0].strip() if forwarded_proto else request.url.scheme
+    return f"{proto}://{get_forwarded_host(request)}"
 
 
 def require_allowed_origin(request: Request):
     """写接口来源校验：Cookie 会自动携带，所以要补一道 CSRF 防线。"""
-    origin = request.headers.get("Origin")
+    origin = get_url_origin(request.headers.get("Origin"))
     referer_origin = get_url_origin(request.headers.get("Referer"))
 
     # curl 或硬件调试工具常常不带这两个头；仍然要求 Cookie 鉴权通过。
@@ -273,6 +283,12 @@ def require_allowed_origin(request: Request):
     candidate_origin = origin or referer_origin
 
     if candidate_origin in allowed_origins or candidate_origin == request_origin:
+        return
+
+    # Cloudflare Tunnel 到本地 Nginx 时可能出现外部 https、内部 http 的协议差异。
+    # 只要 Host 完全一致，仍按同站请求放行；evil.example 这种跨站来源会被挡住。
+    candidate_host = urlparse(candidate_origin).netloc if candidate_origin else ""
+    if candidate_host and candidate_host == get_forwarded_host(request):
         return
 
     raise HTTPException(status_code=403, detail="请求来源不被允许")
