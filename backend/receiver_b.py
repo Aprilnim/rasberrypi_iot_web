@@ -4,8 +4,12 @@
 接收 CMD,LED,ON/OFF 命令，控制 GPIO18 LED，并返回 ACK
 接收 CMD,FAN,ON/OFF 命令，控制 GPIO24 风扇继电器，并返回 ACK
 接收 PING 命令，返回 PONG
+LoRa 报文使用 CRC16 + HMAC-SHA256 + 单调序号，需要 LORA_HMAC_SECRET
 """
 
+import hashlib
+import hmac
+import os
 import sys
 import time
 import traceback
@@ -25,30 +29,86 @@ M0 = 22
 M1 = 27
 LED_PIN = 18
 FAN_PIN = 24
+HMAC_SECRET = os.environ.get("LORA_HMAC_SECRET", "").strip()
+
+if not HMAC_SECRET:
+    print("[Receiver B] FATAL: missing LORA_HMAC_SECRET", file=sys.stderr, flush=True)
+    sys.exit(1)
+
+next_b_seq_value = int(time.time() * 1000)
+last_a_seq = 0
+last_a_response = None
 
 
 def calc_crc(payload: str) -> int:
-    return sum(payload.encode()) % 256
+    crc = 0xFFFF
+    for byte in payload.encode():
+        crc ^= byte << 8
+        for _ in range(8):
+            if crc & 0x8000:
+                crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+            else:
+                crc = (crc << 1) & 0xFFFF
+    return crc
+
+
+def calc_hmac(signed_payload: str) -> str:
+    return hmac.new(
+        HMAC_SECRET.encode("utf-8"),
+        signed_payload.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:16]
+
+
+def next_b_seq() -> int:
+    global next_b_seq_value
+    now_ms = int(time.time() * 1000)
+    next_b_seq_value = max(next_b_seq_value + 1, now_ms)
+    return next_b_seq_value
 
 
 def build_message(payload: str) -> str:
-    crc = calc_crc(payload)
-    return f"{payload},{crc}"
+    seq = next_b_seq()
+    signed_payload = f"{payload},{seq}"
+    signature = calc_hmac(signed_payload)
+    crc_payload = f"{signed_payload},{signature}"
+    crc = calc_crc(crc_payload)
+    return f"{crc_payload},{crc}"
+
+
+def verify_message(message: str) -> Tuple[bool, str, int, bool]:
+    global last_a_seq
+    parts = message.split(",")
+    if len(parts) < 4:
+        return False, "", 0, False
+    received_crc = parts[-1]
+    received_hmac = parts[-2]
+    seq_text = parts[-3]
+    payload = ",".join(parts[:-3])
+    try:
+        seq = int(seq_text)
+        signed_payload = f"{payload},{seq}"
+        crc_payload = f"{signed_payload},{received_hmac}"
+        if str(calc_crc(crc_payload)) != received_crc:
+            return False, "", 0, False
+        expected_hmac = calc_hmac(signed_payload)
+        if not hmac.compare_digest(expected_hmac, received_hmac):
+            print(f"HMAC ERROR: raw={message}", flush=True)
+            return False, "", 0, False
+        if seq < last_a_seq:
+            print(f"REPLAY BLOCKED: seq={seq}, last={last_a_seq}", flush=True)
+            return False, "", 0, False
+        if seq == last_a_seq:
+            return True, payload, seq, True
+        last_a_seq = seq
+        return True, payload, seq, False
+    except Exception:
+        return False, "", 0, False
 
 
 def verify_crc(message: str) -> Tuple[bool, str]:
-    parts = message.split(",")
-    if len(parts) < 2:
-        return False, ""
-    received_crc = parts[-1]
-    payload = ",".join(parts[:-1])
-    try:
-        calculated_crc = calc_crc(payload)
-        if str(calculated_crc) == received_crc:
-            return True, payload
-        return False, ""
-    except Exception:
-        return False, ""
+    ok, payload, _seq, _duplicate = verify_message(message)
+    return ok, payload
 
 
 def fan_on():
@@ -72,6 +132,7 @@ def fan_off():
     
 
 def main():
+    global last_a_response
     print("[Receiver B] Starting...", flush=True)
     led_is_on = False
     fan_is_on = False
@@ -102,16 +163,24 @@ def main():
                 if not raw:
                     continue
 
-                ok, payload = verify_crc(raw)
+                ok, payload, _seq, duplicate = verify_message(raw)
                 if not ok:
                     print(f"CRC ERROR: raw={raw}")
                     continue
+                if duplicate:
+                    if last_a_response:
+                        ser.write((last_a_response + "\n").encode())
+                        ser.flush()
+                        print(f"DUPLICATE SEQ: resent {last_a_response}", flush=True)
+                    continue
+                last_a_response = None
 
                 # 处理 PING
                 if payload == "PING":
                     pong = build_message("PONG")
                     ser.write((pong + "\n").encode())
                     ser.flush()
+                    last_a_response = pong
                     if not heartbeat_connected:
                         heartbeat_connected = True
                         print(f"RX: {raw}", flush=True)
@@ -126,6 +195,7 @@ def main():
                     state = build_message(f"STATE,LED,{led_state},FAN,{fan_state}")
                     ser.write((state + "\n").encode())
                     ser.flush()
+                    last_a_response = state
                     continue
 
                 print(f"RX: {raw}")
@@ -146,6 +216,7 @@ def main():
                         ack = build_message("ACK,LED,ON")
                         ser.write((ack + "\n").encode())
                         ser.flush()
+                        last_a_response = ack
                         print("LED ON")
                     elif action == "OFF":
                         GPIO.output(LED_PIN, GPIO.LOW)
@@ -153,6 +224,7 @@ def main():
                         ack = build_message("ACK,LED,OFF")
                         ser.write((ack + "\n").encode())
                         ser.flush()
+                        last_a_response = ack
                         print("LED OFF")
                     else:
                         print(f"UNKNOWN LED ACTION: {action}")
@@ -164,6 +236,7 @@ def main():
                         ack = build_message("ACK,FAN,ON")
                         ser.write((ack + "\n").encode())
                         ser.flush()
+                        last_a_response = ack
                         print("FAN ON")
                     elif action == "OFF":
                         fan_off()
@@ -171,6 +244,7 @@ def main():
                         ack = build_message("ACK,FAN,OFF")
                         ser.write((ack + "\n").encode())
                         ser.flush()
+                        last_a_response = ack
                         print("FAN OFF")
                     else:
                         print(f"UNKNOWN FAN ACTION: {action}")

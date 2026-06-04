@@ -78,7 +78,10 @@ APP_START_TIME = time.time()
 AUTH_DB_PATH = os.environ.get("YL40IOT_DB_PATH", "/home/pi/yl40iot.db")
 AUTH_TOKEN_TTL_SECONDS = 24 * 60 * 60
 AUTH_COOKIE_NAME = "control_token"
+CSRF_COOKIE_NAME = "csrf_token"
 AUTH_COOKIE_PATH = "/api"
+CSRF_COOKIE_PATH = "/"
+CSRF_SIGNING_SECRET = os.environ.get("CSRF_SIGNING_SECRET") or "yl40iot-csrf-v1"
 
 # 登录失败限流只放内存里：当前项目是单后端容器，简单可靠，也不需要改数据库。
 LOGIN_RATE_WINDOW_SECONDS = 60
@@ -86,6 +89,11 @@ LOGIN_MAX_FAILURES = 5
 login_rate_lock = threading.Lock()
 login_failures_by_ip = {}
 login_failures_by_username = {}
+
+# 硬件写限流：保护继电器和 LoRa 链路，避免误点或脚本快速连续切换。
+CONTROL_RATE_LIMIT_SECONDS = 1.0
+control_rate_lock = threading.Lock()
+control_last_action_at = {}
 
 # ============================================================
 # LoRa 模块初始化
@@ -146,6 +154,14 @@ def get_auth_db():
 
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def make_csrf_token(token_hash: str) -> str:
+    return hmac.new(
+        CSRF_SIGNING_SECRET.encode("utf-8"),
+        token_hash.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
 
 
 def verify_password(password: str, stored_hash: str) -> bool:
@@ -336,6 +352,30 @@ def require_control_auth(control_token: str | None = Cookie(default=None, alias=
         "role": row["role"],
         "token_hash": token_hash,
     }
+
+
+def require_csrf_token(request: Request, user: dict):
+    """写接口二次校验：防止第三方网页借浏览器 Cookie 偷发控制请求。"""
+    sent_token = request.headers.get("X-CSRF-Token", "").strip()
+    expected_token = make_csrf_token(user["token_hash"])
+    if not sent_token or not hmac.compare_digest(sent_token, expected_token):
+        raise HTTPException(status_code=403, detail="CSRF 校验失败")
+
+
+def check_control_rate_limit(user: dict, device: str):
+    """同一用户同一设备 1 秒内只允许一次写操作，保护硬件继电器。"""
+    now = time.time()
+    key = (user["id"], device)
+    with control_rate_lock:
+        last_action_at = control_last_action_at.get(key)
+        if last_action_at is not None and now - last_action_at < CONTROL_RATE_LIMIT_SECONDS:
+            raise HTTPException(status_code=429, detail="操作过于频繁，请稍后再试")
+        control_last_action_at[key] = now
+
+
+def require_admin(user: dict):
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="仅管理员可查看审计记录")
 
 
 def write_control_log(
@@ -752,6 +792,15 @@ def login(data: LoginRequest, request: Request, response: Response):
         samesite="lax",
         path=AUTH_COOKIE_PATH,
     )
+    response.set_cookie(
+        key=CSRF_COOKIE_NAME,
+        value=make_csrf_token(token_hash),
+        max_age=AUTH_TOKEN_TTL_SECONDS,
+        httponly=False,
+        secure=True,
+        samesite="lax",
+        path=CSRF_COOKIE_PATH,
+    )
 
     return {
         "authenticated": True,
@@ -769,10 +818,12 @@ def login(data: LoginRequest, request: Request, response: Response):
 # ------------------------------------------------------------
 @app.post("/auth/logout")
 def logout(
+    request: Request,
     response: Response,
     user=Depends(require_control_auth),
     _origin_ok=Depends(require_allowed_origin),
 ):
+    require_csrf_token(request, user)
     with get_auth_db() as conn:
         conn.execute(
             "UPDATE auth_tokens SET revoked = 1 WHERE token_hash = ?",
@@ -784,6 +835,13 @@ def logout(
         path=AUTH_COOKIE_PATH,
         secure=True,
         httponly=True,
+        samesite="lax",
+    )
+    response.delete_cookie(
+        key=CSRF_COOKIE_NAME,
+        path=CSRF_COOKIE_PATH,
+        secure=True,
+        httponly=False,
         samesite="lax",
     )
     return {"ok": True}
@@ -813,6 +871,7 @@ def get_control_logs(
     limit: int = Query(default=50, ge=1, le=200),
     user=Depends(require_control_auth),
 ):
+    require_admin(user)
     with get_auth_db() as conn:
         rows = conn.execute(
             """
@@ -974,6 +1033,8 @@ def set_led(
     _origin_ok=Depends(require_allowed_origin),
 ):
     action = "ON" if state.on else "OFF"
+    require_csrf_token(request, user)
+    check_control_rate_limit(user, "LED")
 
     if lora is None or not lora.available:
         write_control_log(
@@ -1051,6 +1112,8 @@ def set_fan(
     _origin_ok=Depends(require_allowed_origin),
 ):
     action = "ON" if state.on else "OFF"
+    require_csrf_token(request, user)
+    check_control_rate_limit(user, "FAN")
 
     if lora is None or not lora.available:
         write_control_log(

@@ -14,7 +14,7 @@ It contains:
   - Protects every LoRa serial read/write with one shared serial lock
   - Requires login token auth for hardware write APIs
   - API: `GET /sensor`, `GET /temp`, `GET /light`, `GET /led`, `POST /led`, `GET /fan`, `POST /fan`, `GET /lora/status`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`
-  - `lora.py`: LoRaNode class (serial comm, CRC, ACK retry logic, LED/FAN commands, heartbeat ping, device state query)
+  - `lora.py`: LoRaNode class (serial comm, CRC16 + HMAC/sequence secure messages, ACK retry logic, LED/FAN commands, heartbeat ping, device state query)
 - `frontend/`：Static HTML/CSS/JS IoT Dashboard
   - Dark tech theme with glassmorphism cards
   - Displays real-time sensor readings, LED switch, fan switch, LoRa status, and operation logs
@@ -56,7 +56,8 @@ Before editing code:
 ### Raspberry Pi A (Docker host)
 - `/dev/i2c-1`: YL-40 PCF8591 sensor
 - `/dev/ttyS0`: LoRa serial port
-- `privileged: true` required for GPIO/Serial access inside container
+- `/dev/gpiomem`: GPIO access for LoRa M0/M1
+- Backend should run without `privileged: true`; Docker grants only device mounts plus gpio/i2c/dialout groups.
 
 ### LoRa Module Pins
 - M0 = GPIO22 (set LOW for Normal Mode)
@@ -84,16 +85,22 @@ Before editing code:
 
 ### LoRa Protocol
 
+- Every LoRa message uses secure text framing:
+  - `<payload>,<seq>,<hmac>,<crc16>`
+  - `seq`: monotonic sequence number for replay protection
+  - `hmac`: first 16 hex chars of HMAC-SHA256 over `<payload>,<seq>`
+  - `crc16`: CRC16-CCITT over `<payload>,<seq>,<hmac>`
+- A and B must share the same `LORA_HMAC_SECRET`.
 - Heartbeat:
-  - A -> B: `PING,<crc>`
-  - B -> A: `PONG,<crc>`
+  - A -> B payload: `PING`
+  - B -> A payload: `PONG`
 - Hardware control:
-  - A -> B: `CMD,LED,ON|OFF,<crc>`
-  - A -> B: `CMD,FAN,ON|OFF,<crc>`
-  - B -> A: `ACK,LED,ON|OFF,<crc>` or `ACK,FAN,ON|OFF,<crc>`
+  - A -> B payload: `CMD,LED,ON|OFF`
+  - A -> B payload: `CMD,FAN,ON|OFF`
+  - B -> A payload: `ACK,LED,ON|OFF` or `ACK,FAN,ON|OFF`
 - Device state query:
-  - A -> B: `QUERY,STATE,<crc>`
-  - B -> A: `STATE,LED,ON|OFF,FAN,ON|OFF,<crc>`
+  - A -> B payload: `QUERY,STATE`
+  - B -> A payload: `STATE,LED,ON|OFF,FAN,ON|OFF`
 
 ### Auth
 

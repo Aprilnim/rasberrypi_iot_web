@@ -248,6 +248,10 @@ body {
     gap: 20px;
 }
 
+.dashboard-grid > * {
+    min-width: 0;
+}
+
 .card-col-2 {
     grid-column: span 2;
 }
@@ -258,6 +262,7 @@ body {
 
 /* ========== Card ========== */
 .card {
+    min-width: 0;
     background: var(--card-bg);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
@@ -706,8 +711,11 @@ input:disabled + .slider:before {
 }
 
 .audit-table-wrap {
+    width: 100%;
+    max-width: 100%;
     max-height: 280px;
-    overflow: auto;
+    overflow-x: auto;
+    overflow-y: auto;
     border: 1px solid var(--border-soft);
     border-radius: 10px;
     background: var(--panel-bg-soft);
@@ -1110,7 +1118,9 @@ body[data-theme="light"] .login-field input {
 .auth-toast {
     position: fixed;
     top: 24px;
-    right: 24px;
+    left: 50%;
+    right: auto;
+    bottom: auto;
     z-index: 1100;
     display: flex;
     align-items: center;
@@ -1125,7 +1135,7 @@ body[data-theme="light"] .login-field input {
     box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32);
     color: var(--text-main);
     opacity: 0;
-    transform: translateY(-10px) scale(0.98);
+    transform: translateX(-50%) translateY(-10px) scale(0.98);
     transition: opacity 0.22s ease, transform 0.22s ease;
     pointer-events: none;
 }
@@ -1139,7 +1149,7 @@ body[data-theme="light"] .auth-toast {
 
 .auth-toast.show {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateX(-50%) translateY(0) scale(1);
 }
 
 .auth-toast-dot {
@@ -1282,10 +1292,18 @@ body[data-theme="light"] .auth-toast {
     }
 
     .auth-toast {
-        top: auto;
+        top: 16px;
         right: 16px;
-        bottom: 16px;
         left: 16px;
         width: auto;
+        transform: translateY(-10px) scale(0.98);
+    }
+
+    .auth-toast.show {
+        transform: translateY(0) scale(1);
+    }
+
+    .audit-table {
+        min-width: 680px;
     }
 }

@@ -124,6 +124,22 @@ function isAuthenticated() {
     return authState.authenticated;
 }
 
+function getCookieValue(name) {
+    const prefix = `${name}=`;
+    return document.cookie
+        .split(";")
+        .map((item) => item.trim())
+        .find((item) => item.startsWith(prefix))
+        ?.slice(prefix.length) || "";
+}
+
+function getCsrfHeaders(extraHeaders = {}) {
+    return {
+        ...extraHeaders,
+        "X-CSRF-Token": getCookieValue("csrf_token"),
+    };
+}
+
 function updateAuthButton() {
     if (!els.loginButton || !els.loginLabel) return;
     if (isAuthenticated()) {
@@ -227,6 +243,7 @@ async function logout() {
     try {
         await fetch("/api/auth/logout", {
             method: "POST",
+            headers: getCsrfHeaders(),
         });
     } catch (err) {
         // 即使后端退出失败，本地也切回未登录，避免继续显示控制权限。
@@ -372,11 +389,16 @@ async function updateAuditLogs() {
 
     try {
         const response = await fetch("/api/control/logs?limit=50");
-        if (response.status === 401 || response.status === 403) {
+        if (response.status === 401) {
             setAuthState(false);
             return;
         }
         const data = await response.json();
+        if (response.status === 403) {
+            setAuditHint("仅管理员可查看审计记录");
+            renderAuditMessage(data.detail || "仅管理员可查看审计记录");
+            return;
+        }
         if (!response.ok) {
             renderAuditMessage(data.detail || "审计记录读取失败");
             return;
@@ -586,7 +608,7 @@ async function toggleLed() {
     try {
         const response = await fetch("/api/led", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: getCsrfHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({ on: newState }),
         });
         const data = await response.json();
@@ -595,6 +617,9 @@ async function toggleLed() {
             addLog(data.detail || "LED 控制需要重新登录", "error");
             els.ledSwitch.checked = !newState;
             openLoginModal();
+        } else if (response.status === 429) {
+            addLog(data.detail || "LED 操作过于频繁，请稍后再试", "error");
+            els.ledSwitch.checked = !newState;
         } else if (data.error) {
             addLog(`LED 控制失败：${data.error}`, "error");
             els.ledSwitch.checked = !newState;
@@ -683,7 +708,7 @@ async function toggleFan() {
     try {
         const response = await fetch("/api/fan", {
             method: "POST",
-            headers: { "Content-Type": "application/json" },
+            headers: getCsrfHeaders({ "Content-Type": "application/json" }),
             body: JSON.stringify({ on: newState }),
         });
         const data = await response.json();
@@ -692,6 +717,9 @@ async function toggleFan() {
             addLog(data.detail || "风扇控制需要重新登录", "error");
             els.fanSwitch.checked = !newState;
             openLoginModal();
+        } else if (response.status === 429) {
+            addLog(data.detail || "风扇操作过于频繁，请稍后再试", "error");
+            els.fanSwitch.checked = !newState;
         } else if (data.error) {
             addLog(`风扇控制失败：${data.error}`, "error");
             els.fanSwitch.checked = !newState;

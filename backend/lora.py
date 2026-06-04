@@ -1,3 +1,6 @@
+import hashlib
+import hmac
+import os
 import time
 import threading
 
@@ -18,6 +21,14 @@ class LoRaNode:
         self._available = False
         self._serial_lock = threading.Lock()
         self._state_lock = threading.Lock()
+        self._seq_lock = threading.Lock()
+        self._next_seq_value = int(time.time() * 1000)
+        self._last_b_seq = 0
+        self._hmac_secret = os.environ.get("LORA_HMAC_SECRET", "").strip()
+
+        if not self._hmac_secret:
+            print("[LoRa] Initialization failed: missing LORA_HMAC_SECRET")
+            return
 
         try:
             import RPi.GPIO as GPIO
@@ -43,33 +54,73 @@ class LoRaNode:
 
     @staticmethod
     def calc_crc(payload: str) -> int:
-        return sum(payload.encode()) % 256
+        crc = 0xFFFF
+        for byte in payload.encode():
+            crc ^= byte << 8
+            for _ in range(8):
+                if crc & 0x8000:
+                    crc = ((crc << 1) ^ 0x1021) & 0xFFFF
+                else:
+                    crc = (crc << 1) & 0xFFFF
+        return crc
 
     def build_message(self, payload: str) -> str:
-        crc = self.calc_crc(payload)
-        return f"{payload},{crc}"
+        seq = self.next_seq()
+        signed_payload = f"{payload},{seq}"
+        signature = self.calc_hmac(signed_payload)
+        crc_payload = f"{signed_payload},{signature}"
+        crc = self.calc_crc(crc_payload)
+        return f"{crc_payload},{crc}"
+
+    def verify_message(self, message: str) -> tuple[bool, str, int]:
+        parts = message.split(",")
+        if len(parts) < 4:
+            return False, "", 0
+        received_crc = parts[-1]
+        received_hmac = parts[-2]
+        seq_text = parts[-3]
+        payload = ",".join(parts[:-3])
+        try:
+            seq = int(seq_text)
+            signed_payload = f"{payload},{seq}"
+            crc_payload = f"{signed_payload},{received_hmac}"
+            if str(self.calc_crc(crc_payload)) != received_crc:
+                return False, "", 0
+            expected_hmac = self.calc_hmac(signed_payload)
+            if not hmac.compare_digest(expected_hmac, received_hmac):
+                return False, "", 0
+            if seq <= self._last_b_seq:
+                print(f"REPLAY/BACKWARD SEQ: got={seq}, last={self._last_b_seq}")
+                return False, "", 0
+            self._last_b_seq = seq
+            return True, payload, seq
+        except Exception:
+            return False, "", 0
 
     def verify_crc(self, message: str) -> tuple[bool, str]:
-        parts = message.split(",")
-        if len(parts) < 2:
-            return False, ""
-        received_crc = parts[-1]
-        payload = ",".join(parts[:-1])
-        try:
-            calculated_crc = self.calc_crc(payload)
-            if str(calculated_crc) == received_crc:
-                return True, payload
-            return False, ""
-        except Exception:
-            return False, ""
+        ok, payload, _seq = self.verify_message(message)
+        return ok, payload
+
+    def calc_hmac(self, signed_payload: str) -> str:
+        return hmac.new(
+            self._hmac_secret.encode("utf-8"),
+            signed_payload.encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()[:16]
+
+    def next_seq(self) -> int:
+        with self._seq_lock:
+            now_ms = int(time.time() * 1000)
+            self._next_seq_value = max(self._next_seq_value + 1, now_ms)
+            return self._next_seq_value
 
     def send_device_command(self, device: str, action: str) -> dict:
         """通用设备命令发送：支持 LED、FAN 等任意设备类型
 
         device: 设备名，如 "LED" / "FAN"
         action: "ON" / "OFF"
-        发送格式：CMD,<DEVICE>,<ACTION>,<CRC>
-        等待 ACK：ACK,<DEVICE>,<ACTION>,<CRC>
+        发送格式：CMD,<DEVICE>,<ACTION>,<SEQ>,<HMAC>,<CRC16>
+        等待 ACK：ACK,<DEVICE>,<ACTION>,<SEQ>,<HMAC>,<CRC16>
         """
         if not self._available:
             return {"success": False, "message": "LoRa not available"}
@@ -138,8 +189,8 @@ class LoRaNode:
     def query_device_state(self) -> dict:
         """通过 LoRa 查询树莓派 B 的真实 LED/FAN 状态并更新本地缓存。
 
-        发送格式：QUERY,STATE,<CRC>
-        返回格式：STATE,LED,ON|OFF,FAN,ON|OFF,<CRC>
+        发送格式：QUERY,STATE,<SEQ>,<HMAC>,<CRC16>
+        返回格式：STATE,LED,ON|OFF,FAN,ON|OFF,<SEQ>,<HMAC>,<CRC16>
         """
         if not self._available:
             return {"success": False, "message": "LoRa not available"}
