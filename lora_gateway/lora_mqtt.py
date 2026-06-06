@@ -48,6 +48,8 @@ class LoRaMQTTGateway:
         self._response_queue = queue.Queue()
         self._transaction_lock = threading.Lock()
         self._command_lock = threading.Lock()
+        self._pending_command_lock = threading.Lock()
+        self._pending_command_count = 0
         self._stop_event = threading.Event()
         self._last_b_message_at = None
         # None 强制首次探测结果写入 retained availability，清除 Broker 中可能残留的旧状态。
@@ -183,8 +185,24 @@ class LoRaMQTTGateway:
 
     def _process_command_message(self, message):
         # 串行校验和执行 MQTT 控制命令，避免同一 cmd_id 并发到达时重复操作硬件。
-        with self._command_lock:
-            self._process_command_message_locked(message)
+        self._mark_command_pending()
+        try:
+            with self._command_lock:
+                self._process_command_message_locked(message)
+        finally:
+            self._mark_command_done()
+
+    def _mark_command_pending(self):
+        with self._pending_command_lock:
+            self._pending_command_count += 1
+
+    def _mark_command_done(self):
+        with self._pending_command_lock:
+            self._pending_command_count = max(0, self._pending_command_count - 1)
+
+    def _has_pending_command(self):
+        with self._pending_command_lock:
+            return self._pending_command_count > 0
 
     def _process_command_message_locked(self, message):
         device = message.topic.split("/")[-2]
@@ -240,6 +258,7 @@ class LoRaMQTTGateway:
         if response:
             result = self._make_result(cmd_id, device, requested_state, "success", requested_state, None)
             self._publish_state(device, requested_state, cmd_id)
+            self._publish_pi_b_heartbeat()
         else:
             result = self._make_result(
                 cmd_id,
@@ -337,6 +356,21 @@ class LoRaMQTTGateway:
                 }
             ),
             qos=1,
+            retain=False,
+        )
+
+    def _publish_pi_b_heartbeat(self, uptime=None):
+        self.mqtt.publish(
+            f"{PI_B_PREFIX}/heartbeat",
+            self._json(
+                {
+                    "node": "pi-b",
+                    "online": True,
+                    "uptime": uptime,
+                    "ts_ms": self._now_ms(),
+                }
+            ),
+            qos=0,
             retain=False,
         )
 
@@ -446,23 +480,16 @@ class LoRaMQTTGateway:
                 qos=0,
                 retain=False,
             )
+            # 控制命令优先：有用户命令排队时，本轮跳过 LoRa 后台探测，
+            # 避免 PING / YL40 / STATE 查询抢占同一条串口事务链路。
+            if self._has_pending_command():
+                continue
+
             pong = self._transact("PING", "PONG", retries=1, timeout=1.2)
             if pong:
                 parts = pong.split(",")
                 pi_b_uptime = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else None
-                self.mqtt.publish(
-                    f"{PI_B_PREFIX}/heartbeat",
-                    self._json(
-                        {
-                            "node": "pi-b",
-                            "online": True,
-                            "uptime": pi_b_uptime,
-                            "ts_ms": self._now_ms(),
-                        }
-                    ),
-                    qos=0,
-                    retain=False,
-                )
+                self._publish_pi_b_heartbeat(pi_b_uptime)
             if self._last_b_message_at is None or time.time() - self._last_b_message_at > 5:
                 self._publish_b_availability(False)
 
