@@ -16,7 +16,7 @@ MQTT 模式的唯一控制链路：
 浏览器 -> FastAPI -> MQTT -> lora-gateway -> LoRa -> pi-b
 ```
 
-树莓派 B 不连接 MQTT。
+树莓派 B 不连接 MQTT。YL40 已迁移到树莓派 C，Pi B 的 LoRa 链路只负责控制、ACK、PING/PONG 和低频状态兜底。
 
 ## 2. MQTT Topic
 
@@ -29,7 +29,7 @@ yl40iot/v1
 主要 Topic：
 
 ```text
-yl40iot/v1/nodes/pi-b/telemetry/yl40
+yl40iot/v1/nodes/pi-c/telemetry/yl40
 yl40iot/v1/nodes/pi-c/telemetry/sht35
 yl40iot/v1/nodes/pi-b/commands/led/set
 yl40iot/v1/nodes/pi-b/commands/led/result
@@ -57,8 +57,8 @@ pi-c
 
 | 用户 | Publish | Subscribe |
 |---|---|---|
-| backend | `yl40iot/v1/nodes/pi-b/commands/+/set`、自身 availability | pi-b/pi-c telemetry、state、result、availability、heartbeat |
-| lora-gateway | pi-b telemetry、state、result、availability、heartbeat、error；网关 availability/heartbeat/error | `yl40iot/v1/nodes/pi-b/commands/+/set` |
+| backend | `yl40iot/v1/nodes/pi-b/commands/+/set`、自身 availability | pi-c telemetry；pi-b state、result、availability、heartbeat；网关 availability、heartbeat、error |
+| lora-gateway | pi-b state、result、availability、heartbeat、error；网关 availability/heartbeat/error | `yl40iot/v1/nodes/pi-b/commands/+/set` |
 | pi-c | `yl40iot/v1/nodes/pi-c/#` | 无 |
 
 任何匿名客户端都不能发布硬件控制 Topic。
@@ -123,7 +123,7 @@ scp .\backend\pi_b_node.py pi@192.168.10.84:~/pi_b_node.py
 ```
 
 ```bash
-sudo apt install -y python3-smbus2 python3-serial python3-rpi.gpio
+sudo apt install -y python3-serial python3-rpi.gpio
 source ~/.receiver_b.env
 python3 ~/pi_b_node.py
 ```
@@ -132,16 +132,16 @@ python3 ~/pi_b_node.py
 
 ## 6. 树莓派 C
 
-第二阶段同步：
+同步：
 
 ```powershell
-scp .\backend\pi_c_rs485_node.py pi@树莓派C地址:~/pi_c_rs485_node.py
+scp .\backend\pi_c_rs485_node.py pi4b@192.168.10.209:~/pi_c_rs485_node.py
 ```
 
-树莓派 C 配置 MQTT 账号后运行：
+树莓派 C 接入 SHT35 RS485 和 YL40 I2C 后运行：
 
 ```bash
-sudo apt install -y python3-paho-mqtt python3-serial
+sudo apt install -y python3-paho-mqtt python3-serial python3-smbus2
 export MQTT_HOST=192.168.10.70
 export MQTT_PI_C_USERNAME=pi-c
 export MQTT_PI_C_PASSWORD=替换成pi-c账号密码
@@ -152,7 +152,7 @@ python3 ~/pi_c_rs485_node.py
 
 - EMQX Dashboard 能看到 `backend`、`lora-a`，接入 C 后还能看到 `pi-c`。
 - B 不会出现在 MQTT 客户端列表。
-- `/api/sensor` 从 MQTT 缓存返回数据。
+- `/api/sensor` 从 MQTT 缓存返回 SHT35 温湿度和 Pi C YL40 光照。
 - `/api/led`、`/api/fan` 只有收到匹配 LoRa ACK 后才返回控制成功。
 - B、网关或 Broker 离线时，控制接口失败但 API 不崩溃。
 - 未登录、CSRF 错误或被限流的请求不会发布 MQTT 控制命令。

@@ -7,7 +7,7 @@ This is a Raspberry Pi IoT sensor monitoring & LoRa remote LED/fan control proje
 It contains:
 
 - `backend/`：FastAPI backend (Python 3.11)
-  - Reads YL-40 PCF8591 sensor data via I2C (temperature & light)
+  - In MQTT mode reads SHT35/YL40 values from MQTT caches, not local hardware
   - Sends LoRa commands to remote Raspberry Pi B for GPIO18 LED control and GPIO24 fan relay control
   - Maintains in-process caches for sensor data and remote LED/FAN state
   - Tracks LoRa receiver availability with a background PING/PONG heartbeat
@@ -34,6 +34,7 @@ Target device:
 
 - Raspberry Pi A (runs Docker backend + nginx + LoRa transmitter)
 - Raspberry Pi B (runs `receiver_b.py` + LoRa receiver + GPIO18 LED + GPIO24 fan relay)
+- Raspberry Pi C (runs `pi_c_rs485_node.py`, reads SHT35 over RS485 and YL40 PCF8591 over I2C, publishes MQTT)
 - Linux / Debian
 - Docker Compose
 - Requires I2C (`/dev/i2c-1`), serial (`/dev/ttyS0`), and GPIO access
@@ -44,7 +45,8 @@ Target device:
 - `legacy_lora` remains the default rollback mode.
 - In `mqtt` mode FastAPI must not open GPIO, I2C, RS485, or LoRa serial devices.
 - In `mqtt` mode `lora-gateway` is the only Pi A process allowed to open `/dev/ttyS0`.
-- Raspberry Pi B never connects to MQTT; `pi_b_node.py` sends YL40 telemetry and receives commands only through LoRa.
+- Raspberry Pi B never connects to MQTT; `pi_b_node.py` receives commands and answers heartbeat/state only through LoRa.
+- Raspberry Pi C publishes SHT35 and YL40 telemetry to MQTT.
 - MQTT topics use the `yl40iot/v1/` prefix.
 - MQTT control commands must never be retained.
 - Do not automatically fall back from MQTT control to direct LoRa control.
@@ -67,10 +69,13 @@ Before editing code:
 ## Hardware Dependencies
 
 ### Raspberry Pi A (Docker host)
-- `/dev/i2c-1`: YL-40 PCF8591 sensor
 - `/dev/ttyS0`: LoRa serial port
 - `/dev/gpiomem`: GPIO access for LoRa M0/M1
 - Backend should run without `privileged: true`; Docker grants only device mounts plus gpio/i2c/dialout groups.
+
+### Raspberry Pi C
+- `/dev/ttyS0` or configured serial port: SHT35 RS485 adapter
+- `/dev/i2c-1`: YL-40 PCF8591 sensor
 
 ### LoRa Module Pins
 - M0 = GPIO22 (set LOW for Normal Mode)
@@ -93,6 +98,7 @@ Before editing code:
 - User-triggered GET requests must not directly access GPIO, I2C, `ser.write()`, or `ser.readline()`.
 - A background thread may read PCF8591 sensor data every 1 second and update `sensor_cache`.
 - A background thread may query Raspberry Pi B every 1 second with LoRa `QUERY,STATE` and update LED/FAN state cache.
+- In MQTT mode, SHT35/YL40 data comes from Pi C MQTT telemetry and Pi B must not send YL40 telemetry over LoRa.
 - `POST /led` and `POST /fan` are the hardware write APIs. They require auth, use the shared serial lock, send LoRa commands, wait for ACK, then update cache.
 - If polling fails, keep serving the last known cached value with error/stale metadata instead of crashing the API.
 

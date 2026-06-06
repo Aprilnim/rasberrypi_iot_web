@@ -32,9 +32,9 @@ MQTT_USERNAME = os.environ.get("MQTT_GATEWAY_USERNAME", "lora-gateway")
 MQTT_PASSWORD = os.environ.get("MQTT_GATEWAY_PASSWORD", "")
 MQTT_CLIENT_ID = os.environ.get("MQTT_GATEWAY_CLIENT_ID", "lora-a")
 START_TIME = time.time()
-CONTROL_ACK_RETRIES = 2
-CONTROL_ACK_TIMEOUT = 1.2
-YL40_QUERY_INTERVAL = 5.0
+CONTROL_ACK_RETRIES = 3
+CONTROL_ACK_TIMEOUT = 1.5
+PI_B_OFFLINE_GRACE = 12.0
 STATE_QUERY_INTERVAL = 10.0
 LOCK_BUSY = object()
 
@@ -62,7 +62,6 @@ class LoRaMQTTGateway:
         self._last_cmd_id = {"led": None, "fan": None}
         self._recent_results = OrderedDict()
         self._recent_results_lock = threading.Lock()
-        self._last_yl40_query_at = 0.0
         self._last_state_query_at = 0.0
 
         GPIO.setmode(GPIO.BCM)
@@ -272,14 +271,20 @@ class LoRaMQTTGateway:
             self._publish_state(device, requested_state, cmd_id)
             self._publish_pi_b_heartbeat()
         else:
-            result = self._make_result(
-                cmd_id,
-                device,
-                requested_state,
-                "failed",
-                None,
-                "LoRa ACK timeout",
-            )
+            actual_state = self._confirm_state_after_ack_timeout(device, requested_state)
+            if actual_state == requested_state:
+                result = self._make_result(cmd_id, device, requested_state, "success", actual_state, None)
+                self._publish_state(device, actual_state, cmd_id)
+                self._publish_pi_b_heartbeat()
+            else:
+                result = self._make_result(
+                    cmd_id,
+                    device,
+                    requested_state,
+                    "failed",
+                    actual_state,
+                    "LoRa ACK timeout",
+                )
         self._remember_and_publish(device, result)
 
     @staticmethod
@@ -420,29 +425,6 @@ class LoRaMQTTGateway:
 
     def _handle_lora_payload(self, payload):
         parts = payload.split(",")
-        if len(parts) == 3 and parts[:2] == ["TELEMETRY", "YL40"]:
-            try:
-                raw_light = int(parts[2])
-                light_percent = round(((255.0 - raw_light) / 255.0) * 100.0, 1)
-            except Exception:
-                return
-            self.mqtt.publish(
-                f"{PI_B_PREFIX}/telemetry/yl40",
-                self._json(
-                    {
-                        "node": "pi-b",
-                        "device": "yl40",
-                        "light_percent": light_percent,
-                        "raw_light": raw_light,
-                        "ts_ms": self._now_ms(),
-                    }
-                ),
-                qos=1,
-                retain=True,
-            )
-            self._response_queue.put(payload)
-            return
-
         if len(parts) == 5 and parts[0] == "STATE" and parts[1] == "LED" and parts[3] == "FAN":
             if parts[2] in ("ON", "OFF") and parts[4] in ("ON", "OFF"):
                 self._publish_state("led", parts[2].lower())
@@ -451,6 +433,28 @@ class LoRaMQTTGateway:
             return
 
         self._response_queue.put(payload)
+
+    @staticmethod
+    def _state_from_payload(payload, device):
+        parts = payload.split(",")
+        if len(parts) != 5 or parts[0] != "STATE" or parts[1] != "LED" or parts[3] != "FAN":
+            return None
+        if parts[2] not in ("ON", "OFF") or parts[4] not in ("ON", "OFF"):
+            return None
+        states = {"led": parts[2].lower(), "fan": parts[4].lower()}
+        return states.get(device)
+
+    def _confirm_state_after_ack_timeout(self, device, requested_state):
+        response = self._transact("QUERY,STATE", "STATE", retries=2, timeout=1.0)
+        if response and response is not LOCK_BUSY:
+            actual_state = self._state_from_payload(response, device)
+            if actual_state:
+                print(
+                    f"[LoRa] ACK timeout confirmed by STATE: {device} requested={requested_state} actual={actual_state}",
+                    flush=True,
+                )
+                return actual_state
+        return None
 
     def _transact(self, payload, expected, retries=1, timeout=2.0, blocking=True):
         message = self.build_message(payload)
@@ -506,22 +510,10 @@ class LoRaMQTTGateway:
                 parts = pong.split(",")
                 pi_b_uptime = int(parts[1]) if len(parts) == 2 and parts[1].isdigit() else None
                 self._publish_pi_b_heartbeat(pi_b_uptime)
-            if self._last_b_message_at is None or time.time() - self._last_b_message_at > 5:
+            if self._last_b_message_at is None or time.time() - self._last_b_message_at > PI_B_OFFLINE_GRACE:
                 self._publish_b_availability(False)
 
             now = time.time()
-            if self._b_online and now - self._last_yl40_query_at >= YL40_QUERY_INTERVAL:
-                self._last_yl40_query_at = now
-                response = self._transact(
-                    "QUERY,YL40",
-                    "TELEMETRY,YL40",
-                    retries=1,
-                    timeout=1.2,
-                    blocking=False,
-                )
-                if response is not LOCK_BUSY and not response:
-                    self._publish_pi_b_error("yl40", "YL40 query timeout")
-
             if self._b_online and now - self._last_state_query_at >= STATE_QUERY_INTERVAL:
                 self._last_state_query_at = now
                 self._transact("QUERY,STATE", "STATE", retries=1, timeout=1.2, blocking=False)

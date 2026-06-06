@@ -73,10 +73,16 @@ localStorage.removeItem("yl40iot_access_token");
 let authToastTimer = null;
 let ledControlPending = false;
 let fanControlPending = false;
+let ledControlProtectUntil = 0;
+let fanControlProtectUntil = 0;
 let sensorPolling = false;
 let uptimePolling = false;
 let loraPolling = false;
 let deviceStatesPolling = false;
+let loraOfflineStreak = 0;
+const CONTROL_MIN_PENDING_MS = 1500;
+const CONTROL_SUCCESS_SYNC_DELAY_MS = 3000;
+const CONTROL_FAILURE_CONFIRM_DELAY_MS = 1000;
 
 // ------------------------------------------------------------
 // 主题模式：手动优先 + 系统默认
@@ -147,6 +153,17 @@ function getCsrfHeaders(extraHeaders = {}) {
         ...extraHeaders,
         "X-CSRF-Token": getCookieValue("csrf_token"),
     };
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+async function keepMinimumPending(startedAt) {
+    const remaining = CONTROL_MIN_PENDING_MS - (Date.now() - startedAt);
+    if (remaining > 0) {
+        await sleep(remaining);
+    }
 }
 
 function updateAuthButton() {
@@ -452,6 +469,89 @@ function showFanPending(isOn) {
     els.fanStatus.innerText = isOn ? "开启中" : "关闭中";
 }
 
+function showLedConfirming(isOn) {
+    updateLedVisual(isOn);
+    els.ledStatus.innerText = "确认中";
+}
+
+function showFanConfirming(isOn) {
+    updateFanVisual(isOn);
+    els.fanStatus.innerText = "确认中";
+}
+
+function scheduleLedCacheSync() {
+    ledControlProtectUntil = Date.now() + CONTROL_SUCCESS_SYNC_DELAY_MS;
+    window.setTimeout(updateLed, CONTROL_SUCCESS_SYNC_DELAY_MS);
+}
+
+function scheduleFanCacheSync() {
+    fanControlProtectUntil = Date.now() + CONTROL_SUCCESS_SYNC_DELAY_MS;
+    window.setTimeout(updateFan, CONTROL_SUCCESS_SYNC_DELAY_MS);
+}
+
+async function getDeviceState(device) {
+    const response = await fetch(`/api/${device}`);
+    const data = await response.json();
+    if (!response.ok || !data.available) {
+        return null;
+    }
+    return data;
+}
+
+async function confirmLedStateAfterFailure(targetState, errorMessage) {
+    showLedConfirming(targetState);
+    ledControlProtectUntil = Date.now() + CONTROL_FAILURE_CONFIRM_DELAY_MS + CONTROL_MIN_PENDING_MS;
+    await sleep(CONTROL_FAILURE_CONFIRM_DELAY_MS);
+
+    try {
+        const data = await getDeviceState("led");
+        if (data && data.on === targetState) {
+            els.ledSwitch.checked = targetState;
+            updateLedVisual(targetState);
+            addLog(`LED 已${targetState ? "开启" : "关闭"}（状态确认）`, "action");
+            updateLastTime("led");
+            updateAuditLogs();
+            scheduleLedCacheSync();
+            return true;
+        }
+    } catch (err) {
+        // 确认失败时再按原错误回滚，避免 ACK 超时但硬件已执行时误判。
+    }
+
+    els.ledSwitch.checked = !targetState;
+    updateLedVisual(!targetState);
+    addLog(`LED 控制失败：${errorMessage}`, "error");
+    updateAuditLogs();
+    return false;
+}
+
+async function confirmFanStateAfterFailure(targetState, errorMessage) {
+    showFanConfirming(targetState);
+    fanControlProtectUntil = Date.now() + CONTROL_FAILURE_CONFIRM_DELAY_MS + CONTROL_MIN_PENDING_MS;
+    await sleep(CONTROL_FAILURE_CONFIRM_DELAY_MS);
+
+    try {
+        const data = await getDeviceState("fan");
+        if (data && data.on === targetState) {
+            els.fanSwitch.checked = targetState;
+            updateFanVisual(targetState);
+            addLog(`风扇已${targetState ? "开启" : "关闭"}（状态确认）`, "action");
+            updateLastTime("fan");
+            updateAuditLogs();
+            scheduleFanCacheSync();
+            return true;
+        }
+    } catch (err) {
+        // 确认失败时再按原错误回滚，避免 ACK 超时但硬件已执行时误判。
+    }
+
+    els.fanSwitch.checked = !targetState;
+    updateFanVisual(!targetState);
+    addLog(`风扇控制失败：${errorMessage}`, "error");
+    updateAuditLogs();
+    return false;
+}
+
 // ------------------------------------------------------------
 // updateUptimeFromBackend()
 // 从后端获取真实的系统运行时长（Docker 容器启动后的时间）
@@ -597,7 +697,7 @@ function updateLedVisual(isOn) {
 // 当本浏览器正在发控制请求时跳过，避免轮询覆盖用户刚点击的开关
 // ------------------------------------------------------------
 async function updateLed() {
-    if (ledControlPending) return;
+    if (ledControlPending || Date.now() < ledControlProtectUntil) return;
 
     try {
         const response = await fetch("/api/led");
@@ -631,8 +731,14 @@ async function toggleLed() {
         openLoginModal();
         return;
     }
+    if (ledControlPending) {
+        els.ledSwitch.checked = !newState;
+        return;
+    }
 
+    const startedAt = Date.now();
     ledControlPending = true;
+    ledControlProtectUntil = startedAt + CONTROL_MIN_PENDING_MS;
     showLedPending(newState);
     try {
         const response = await fetch("/api/led", {
@@ -652,27 +758,21 @@ async function toggleLed() {
             els.ledSwitch.checked = !newState;
             updateLedVisual(!newState);
         } else if (data.error) {
-            addLog(`LED 控制失败：${data.error}`, "error");
-            els.ledSwitch.checked = !newState;
-            updateLedVisual(!newState);
-            updateAuditLogs();
+            await confirmLedStateAfterFailure(newState, data.error);
         } else if (data.available) {
+            els.ledSwitch.checked = data.on;
             updateLedVisual(data.on);
             addLog(`LED 已${data.on ? "开启" : "关闭"}`, "action");
             updateLastTime("led");
             updateAuditLogs();
-            window.setTimeout(updateLed, 1000);
+            scheduleLedCacheSync();
         } else {
-            addLog("LED 控制失败：硬件不可用", "error");
-            els.ledSwitch.checked = !newState;
-            updateLedVisual(!newState);
-            updateAuditLogs();
+            await confirmLedStateAfterFailure(newState, "硬件不可用");
         }
     } catch (err) {
-        addLog("LED 控制失败：网络错误", "error");
-        els.ledSwitch.checked = !newState;
-        updateLedVisual(!newState);
+        await confirmLedStateAfterFailure(newState, "网络错误");
     } finally {
+        await keepMinimumPending(startedAt);
         ledControlPending = false;
     }
 }
@@ -706,7 +806,7 @@ function updateFanVisual(isOn) {
 // 当本浏览器正在发控制请求时跳过，避免轮询覆盖用户刚点击的开关
 // ------------------------------------------------------------
 async function updateFan() {
-    if (fanControlPending) return;
+    if (fanControlPending || Date.now() < fanControlProtectUntil) return;
 
     try {
         const response = await fetch("/api/fan");
@@ -738,8 +838,14 @@ async function toggleFan() {
         openLoginModal();
         return;
     }
+    if (fanControlPending) {
+        els.fanSwitch.checked = !newState;
+        return;
+    }
 
+    const startedAt = Date.now();
     fanControlPending = true;
+    fanControlProtectUntil = startedAt + CONTROL_MIN_PENDING_MS;
     showFanPending(newState);
     try {
         const response = await fetch("/api/fan", {
@@ -759,27 +865,21 @@ async function toggleFan() {
             els.fanSwitch.checked = !newState;
             updateFanVisual(!newState);
         } else if (data.error) {
-            addLog(`风扇控制失败：${data.error}`, "error");
-            els.fanSwitch.checked = !newState;
-            updateFanVisual(!newState);
-            updateAuditLogs();
+            await confirmFanStateAfterFailure(newState, data.error);
         } else if (data.available) {
+            els.fanSwitch.checked = data.on;
             updateFanVisual(data.on);
             addLog(`风扇已${data.on ? "开启" : "关闭"}`, "action");
             updateLastTime("fan");
             updateAuditLogs();
-            window.setTimeout(updateFan, 1000);
+            scheduleFanCacheSync();
         } else {
-            addLog("风扇控制失败：硬件不可用", "error");
-            els.fanSwitch.checked = !newState;
-            updateFanVisual(!newState);
-            updateAuditLogs();
+            await confirmFanStateAfterFailure(newState, "硬件不可用");
         }
     } catch (err) {
-        addLog("风扇控制失败：网络错误", "error");
-        els.fanSwitch.checked = !newState;
-        updateFanVisual(!newState);
+        await confirmFanStateAfterFailure(newState, "网络错误");
     } finally {
+        await keepMinimumPending(startedAt);
         fanControlPending = false;
     }
 }
@@ -820,12 +920,22 @@ async function updateLoraStatus() {
     try {
         const response = await fetch("/api/lora/status");
         const data = await response.json();
-        setLoraOnline(data.online);
         if (data.online) {
+            loraOfflineStreak = 0;
+            setLoraOnline(true);
             setBackendOnline(true);
+        } else {
+            setBackendOnline(true);
+            loraOfflineStreak += 1;
+            if (loraOfflineStreak >= 2) {
+                setLoraOnline(false);
+            }
         }
     } catch (err) {
-        setLoraOnline(false);
+        loraOfflineStreak += 1;
+        if (loraOfflineStreak >= 2) {
+            setLoraOnline(false);
+        }
         setBackendOnline(false);
     } finally {
         loraPolling = false;

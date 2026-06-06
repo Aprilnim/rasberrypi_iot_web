@@ -14,7 +14,6 @@
   "yl40iot/v1/services/backend/availability"
 ]}.
 {allow, {user, "backend"}, subscribe, [
-  "yl40iot/v1/nodes/pi-b/telemetry/#",
   "yl40iot/v1/nodes/pi-b/state/#",
   "yl40iot/v1/nodes/pi-b/commands/+/result",
   "yl40iot/v1/nodes/pi-b/availability",
@@ -29,12 +28,11 @@
   "yl40iot/v1/gateways/lora-a/events/#"
 ]}.
 
-%% LoRa gateway receives only Pi B commands and publishes only gateway/Pi B data.
+%% LoRa gateway receives only Pi B commands and publishes only gateway/Pi B control/status data.
 {allow, {user, "lora-gateway"}, subscribe, [
   "yl40iot/v1/nodes/pi-b/commands/+/set"
 ]}.
 {allow, {user, "lora-gateway"}, publish, [
-  "yl40iot/v1/nodes/pi-b/telemetry/#",
   "yl40iot/v1/nodes/pi-b/state/#",
   "yl40iot/v1/nodes/pi-b/commands/+/result",
   "yl40iot/v1/nodes/pi-b/availability",

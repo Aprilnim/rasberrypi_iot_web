@@ -12,6 +12,11 @@ PI_B_PREFIX = f"{TOPIC_PREFIX}/nodes/pi-b"
 PI_C_PREFIX = f"{TOPIC_PREFIX}/nodes/pi-c"
 GATEWAY_PREFIX = f"{TOPIC_PREFIX}/gateways/lora-a"
 BACKEND_AVAILABILITY_TOPIC = f"{TOPIC_PREFIX}/services/backend/availability"
+HEARTBEAT_GRACE_MS = {
+    "pi_b": 12000,
+    "pi_c": 8000,
+    "gateway": 8000,
+}
 
 
 class MQTTService:
@@ -38,7 +43,7 @@ class MQTTService:
                 "light_percent": None,
                 "raw_light": None,
                 "updated_at": None,
-                "error": "pi-b YL40 data not received",
+                "error": "pi-c YL40 data not received",
             },
             "sht35": {
                 "temperature": None,
@@ -112,7 +117,7 @@ class MQTTService:
             self._connected = True
 
         subscriptions = [
-            (f"{PI_B_PREFIX}/telemetry/yl40", 1),
+            (f"{PI_C_PREFIX}/telemetry/yl40", 1),
             (f"{PI_C_PREFIX}/telemetry/sht35", 1),
             (f"{PI_B_PREFIX}/state/+", 1),
             (f"{PI_B_PREFIX}/commands/+/result", 1),
@@ -151,7 +156,7 @@ class MQTTService:
 
         now = time.time()
         with self._lock:
-            if message.topic == f"{PI_B_PREFIX}/telemetry/yl40":
+            if message.topic == f"{PI_C_PREFIX}/telemetry/yl40":
                 self._cache["yl40"].update(
                     {
                         "light_percent": data.get("light_percent"),
@@ -202,9 +207,9 @@ class MQTTService:
                     pending["result"] = data
                     pending["event"].set()
             elif message.topic.endswith("/events/error"):
-                if message.topic == f"{PI_B_PREFIX}/events/error" and data.get("device") == "yl40":
-                    self._cache["yl40"]["error"] = data.get("error") or "pi-b YL40 error"
-                elif message.topic == f"{PI_C_PREFIX}/events/error":
+                if message.topic == f"{PI_C_PREFIX}/events/error" and data.get("device") == "yl40":
+                    self._cache["yl40"]["error"] = data.get("error") or "pi-c YL40 error"
+                elif message.topic == f"{PI_C_PREFIX}/events/error" and data.get("device") == "sht35":
                     self._cache["sht35"]["error"] = data.get("error") or "pi-c SHT35 error"
                 print(f"[MQTT] Device error on {message.topic}: {data.get('error')}")
 
@@ -239,7 +244,8 @@ class MQTTService:
     def _node_online_locked(self, key):
         state = self._cache[key]
         age_ms = self._age_ms(state["heartbeat_at"])
-        return state["online"] and age_ms is not None and age_ms <= 5000
+        grace_ms = HEARTBEAT_GRACE_MS.get(key, 5000)
+        return state["online"] and age_ms is not None and age_ms <= grace_ms
 
     def get_sensor_snapshot(self):
         with self._lock:
@@ -253,8 +259,6 @@ class MQTTService:
         ]
         updated_at = max(updated_values) if updated_values else None
         errors = []
-        if not pi_b_online:
-            errors.append("pi-b offline")
         if not pi_c_online:
             errors.append("pi-c offline")
         if yl40["error"]:

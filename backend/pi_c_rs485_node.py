@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""树莓派 C SHT35-485 采集节点，直接向局域网 EMQX 发布数据。"""
+"""树莓派 C 采集节点：读取 SHT35-485 和 YL40，并直接向局域网 EMQX 发布数据。"""
 
 import json
 import os
@@ -7,6 +7,7 @@ import time
 
 import paho.mqtt.client as mqtt
 import serial
+import smbus2 as smbus
 
 
 TOPIC_PREFIX = "yl40iot/v1/nodes/pi-c"
@@ -15,6 +16,8 @@ MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
 MQTT_USERNAME = os.environ.get("MQTT_PI_C_USERNAME", "pi-c")
 MQTT_PASSWORD = os.environ.get("MQTT_PI_C_PASSWORD", "123")
 SERIAL_PORT = os.environ.get("SHT35_SERIAL_PORT", "/dev/ttyS0")
+I2C_BUS = int(os.environ.get("YL40_I2C_BUS", "1"))
+PCF8591_ADDR = int(os.environ.get("YL40_PCF8591_ADDR", "0x48"), 0)
 REQUEST_FRAME = bytes.fromhex("01 03 00 00 00 02 C4 0B")
 START_TIME = time.time()
 
@@ -54,6 +57,29 @@ def parse_response(frame):
     return raw_temperature, raw_humidity
 
 
+def read_light_raw(bus):
+    bus.write_byte(PCF8591_ADDR, 0x40)
+    bus.read_byte(PCF8591_ADDR)
+    return bus.read_byte(PCF8591_ADDR)
+
+
+def publish_error(client, device, error):
+    client.publish(
+        f"{TOPIC_PREFIX}/events/error",
+        encode(
+            {
+                "node": "pi-c",
+                "device": device,
+                "error": str(error),
+                "online": True,
+                "ts_ms": now_ms(),
+            }
+        ),
+        qos=1,
+        retain=False,
+    )
+
+
 def main():
     client = mqtt.Client(client_id="pi-c", clean_session=True)
     if MQTT_USERNAME:
@@ -73,68 +99,92 @@ def main():
         retain=True,
     )
 
+    try:
+        bus = smbus.SMBus(I2C_BUS)
+    except Exception as exc:
+        publish_error(client, "yl40", exc)
+        bus = None
+
+    ser = None
     while True:
         try:
-            with serial.Serial(
-                SERIAL_PORT,
-                9600,
-                bytesize=8,
-                parity=serial.PARITY_NONE,
-                stopbits=1,
-                timeout=1,
-            ) as ser:
-                while True:
-                    ser.reset_input_buffer()
-                    ser.write(REQUEST_FRAME)
-                    ser.flush()
-                    frame = ser.read(9)
-                    raw_temperature, raw_humidity = parse_response(frame)
+            if ser is None:
+                ser = serial.Serial(
+                    SERIAL_PORT,
+                    9600,
+                    bytesize=8,
+                    parity=serial.PARITY_NONE,
+                    stopbits=1,
+                    timeout=1,
+                )
+
+            try:
+                ser.reset_input_buffer()
+                ser.write(REQUEST_FRAME)
+                ser.flush()
+                frame = ser.read(9)
+                raw_temperature, raw_humidity = parse_response(frame)
+                client.publish(
+                    f"{TOPIC_PREFIX}/telemetry/sht35",
+                    encode(
+                        {
+                            "node": "pi-c",
+                            "device": "sht35",
+                            "temperature": round(raw_temperature / 10.0, 1),
+                            "humidity": round(raw_humidity / 10.0, 1),
+                            "raw_temperature": raw_temperature,
+                            "raw_humidity": raw_humidity,
+                            "ts_ms": now_ms(),
+                        }
+                    ),
+                    qos=1,
+                    retain=True,
+                )
+            except Exception as exc:
+                publish_error(client, "sht35", exc)
+                try:
+                    ser.close()
+                except Exception:
+                    pass
+                ser = None
+
+            if bus is not None:
+                try:
+                    raw_light = read_light_raw(bus)
+                    light_percent = round(((255.0 - raw_light) / 255.0) * 100.0, 1)
                     client.publish(
-                        f"{TOPIC_PREFIX}/telemetry/sht35",
+                        f"{TOPIC_PREFIX}/telemetry/yl40",
                         encode(
                             {
                                 "node": "pi-c",
-                                "device": "sht35",
-                                "temperature": round(raw_temperature / 10.0, 1),
-                                "humidity": round(raw_humidity / 10.0, 1),
-                                "raw_temperature": raw_temperature,
-                                "raw_humidity": raw_humidity,
+                                "device": "yl40",
+                                "light_percent": light_percent,
+                                "raw_light": raw_light,
                                 "ts_ms": now_ms(),
                             }
                         ),
                         qos=1,
                         retain=True,
                     )
-                    client.publish(
-                        f"{TOPIC_PREFIX}/heartbeat",
-                        encode(
-                            {
-                                "node": "pi-c",
-                                "online": True,
-                                "uptime": int(time.time() - START_TIME),
-                                "ts_ms": now_ms(),
-                            }
-                        ),
-                        qos=0,
-                        retain=False,
-                    )
-                    time.sleep(2)
-        except Exception as exc:
+                except Exception as exc:
+                    publish_error(client, "yl40", exc)
+
             client.publish(
-                f"{TOPIC_PREFIX}/events/error",
+                f"{TOPIC_PREFIX}/heartbeat",
                 encode(
                     {
                         "node": "pi-c",
-                        "device": "sht35",
-                        "error": str(exc),
-                        "online": False,
+                        "online": True,
+                        "uptime": int(time.time() - START_TIME),
                         "ts_ms": now_ms(),
                     }
                 ),
-                qos=1,
+                qos=0,
                 retain=False,
             )
-            time.sleep(2)
+        except Exception as exc:
+            publish_error(client, "pi-c", exc)
+        time.sleep(2)
 
 
 if __name__ == "__main__":

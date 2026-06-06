@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""树莓派 B 边缘节点：永不上 MQTT，只通过 LoRa 上报 YL40 和执行控制。"""
+"""树莓派 B 边缘节点：永不上 MQTT，只通过 LoRa 执行 LED/FAN 控制。"""
 
 import hashlib
 import hmac
@@ -11,7 +11,6 @@ from collections import OrderedDict
 
 import RPi.GPIO as GPIO
 import serial
-import smbus2 as smbus
 
 
 PORT = "/dev/ttyS0"
@@ -20,10 +19,8 @@ M0 = 22
 M1 = 27
 LED_PIN = 18
 FAN_PIN = 24
-PCF8591_ADDR = 0x48
 HMAC_SECRET = os.environ.get("LORA_HMAC_SECRET", "").strip()
 START_TIME = time.time()
-YL40_TELEMETRY_INTERVAL = 3.0
 
 if not HMAC_SECRET:
     print("[Pi B] FATAL: missing LORA_HMAC_SECRET", file=sys.stderr, flush=True)
@@ -109,29 +106,11 @@ def fan_off():
     GPIO.setup(FAN_PIN, GPIO.IN)
 
 
-def read_light_raw(bus):
-    try:
-        bus.write_byte(PCF8591_ADDR, 0x40)
-        bus.read_byte(PCF8591_ADDR)
-        return bus.read_byte(PCF8591_ADDR)
-    except Exception as exc:
-        print(f"[Pi B] YL40 read failed: {exc}", flush=True)
-        return None
-
-
 def send_payload(ser, payload):
     message = build_message(payload)
     ser.write((message + "\n").encode("utf-8"))
     ser.flush()
     return message
-
-
-def send_yl40_telemetry(ser, bus):
-    raw_light = read_light_raw(bus)
-    if raw_light is None:
-        return False
-    send_payload(ser, f"TELEMETRY,YL40,{raw_light}")
-    return True
 
 
 def main():
@@ -146,21 +125,16 @@ def main():
     GPIO.output(LED_PIN, GPIO.LOW)
     fan_off()
 
-    bus = smbus.SMBus(1)
     ser = serial.Serial(PORT, BAUDRATE, timeout=0.2)
     led_is_on = False
     fan_is_on = False
     handled_commands = OrderedDict()
     heartbeat_connected = False
-    last_yl40_telemetry_at = 0.0
 
-    print("[Pi B] GPIO, I2C and LoRa initialized", flush=True)
+    print("[Pi B] GPIO and LoRa initialized", flush=True)
     try:
         while True:
             if ser.in_waiting <= 0:
-                if time.time() - last_yl40_telemetry_at >= YL40_TELEMETRY_INTERVAL:
-                    if send_yl40_telemetry(ser, bus):
-                        last_yl40_telemetry_at = time.time()
                 time.sleep(0.02)
                 continue
 
@@ -194,14 +168,6 @@ def main():
                 fan_state = "ON" if fan_is_on else "OFF"
                 last_a_response = f"STATE,LED,{led_state},FAN,{fan_state}"
                 send_payload(ser, last_a_response)
-                continue
-
-            if payload == "QUERY,YL40":
-                raw_light = read_light_raw(bus)
-                if raw_light is not None:
-                    last_yl40_telemetry_at = time.time()
-                    last_a_response = f"TELEMETRY,YL40,{raw_light}"
-                    send_payload(ser, last_a_response)
                 continue
 
             parts = payload.split(",")
@@ -240,7 +206,6 @@ def main():
         fan_off()
         GPIO.output(LED_PIN, GPIO.LOW)
         ser.close()
-        bus.close()
         GPIO.cleanup()
         print("[Pi B] Cleaned up", flush=True)
 
