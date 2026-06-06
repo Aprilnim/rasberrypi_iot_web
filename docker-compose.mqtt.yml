@@ -14,6 +14,9 @@ services:
       - "/dev/ttyS0:/dev/ttyS0"
       - "/dev/gpiomem:/dev/gpiomem"
 
+    volumes:
+      - "/proc/device-tree:/proc/device-tree:ro"
+
     group_add:
       - "986"
       - "20"
