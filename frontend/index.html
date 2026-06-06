@@ -43,7 +43,15 @@
                             <span class="metric-value" id="temp">--</span>
                             <span class="metric-unit">℃</span>
                         </div>
-                        <div class="metric-label">环境温度</div>
+                        <div class="metric-label">SHT35 温度</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-icon">💧</div>
+                        <div class="metric-data">
+                            <span class="metric-value" id="humidity">--</span>
+                            <span class="metric-unit">%RH</span>
+                        </div>
+                        <div class="metric-label">SHT35 湿度</div>
                     </div>
                     <div class="metric-box">
                         <div class="metric-icon">☀</div>
@@ -51,7 +59,7 @@
                             <span class="metric-value" id="light">--</span>
                             <span class="metric-unit">%</span>
                         </div>
-                        <div class="metric-label">光照强度</div>
+                        <div class="metric-label">YL40 光照</div>
                     </div>
                 </div>
             </section>
@@ -118,7 +126,7 @@
                     </div>
                     <div class="info-row">
                         <span class="info-key">传感器</span>
-                        <span class="info-val">PCF8591</span>
+                        <span class="info-val">SHT35 + YL40</span>
                     </div>
                     <div class="info-row">
                         <span class="info-key">主控</span>
@@ -150,7 +158,7 @@
                     </div>
                     <div class="info-row">
                         <span class="info-key">通信协议</span>
-                        <span class="info-val">I2C + LoRa</span>
+                        <span class="info-val">MQTT + LoRa + RS485</span>
                     </div>
                 </div>
             </section>

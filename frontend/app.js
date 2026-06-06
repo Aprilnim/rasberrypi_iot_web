@@ -1,7 +1,7 @@
 // ============================================================
 // 前端 JavaScript —— YL-40 IoT 监控台
 // 功能：
-//   1. 每秒从后端获取温度/光照传感器数据并刷新显示
+//   1. 每秒从后端获取 SHT35 温湿度与 YL40 光照缓存并刷新显示
 //   2. 通过 LED 开关按钮控制树莓派 B 的 GPIO18 LED
 //   3. 通过风扇开关按钮控制树莓派 B 的 GPIO24 风扇继电器
 //   4. 每 3 秒查询一次 LoRa 心跳状态，判断树莓派 B 是否在线
@@ -24,6 +24,7 @@
 // ------------------------------------------------------------
 const els = {
     temp: document.getElementById("temp"),           // 温度数值显示区域
+    humidity: document.getElementById("humidity"),   // 湿度数值显示区域
     light: document.getElementById("light"),         // 光照数值显示区域
     ledSwitch: document.getElementById("led-switch"), // LED 滑动开关（input checkbox）
     ledStatus: document.getElementById("led-status"), // LED 状态文字（开/关/不可用）
@@ -293,6 +294,14 @@ function formatTime(date) {
     return date.toLocaleTimeString("zh-CN", { hour12: false });
 }
 
+function formatMetric(value) {
+    const number = Number(value);
+    if (value === null || value === undefined || Number.isNaN(number)) {
+        return "--";
+    }
+    return Number.isInteger(number) ? String(number) : number.toFixed(1);
+}
+
 // ------------------------------------------------------------
 // addLog(message, type)
 // 往页面底部的操作日志区域追加一条日志
@@ -522,9 +531,9 @@ function setLoraOnline(online) {
 
 // ------------------------------------------------------------
 // updateSensor()
-// 异步获取传感器数据（温度和光照）
+// 异步获取传感器数据（SHT35 温湿度 + YL40 光照）
 // 请求路径：/api/sensor（nginx 代理到后端 /sensor）
-// 成功：把 temperature 和 light_percent 显示到页面上，标记后端在线，记录更新时间
+// 成功：把 temperature、humidity 和 light_percent 显示到页面上，标记后端在线，记录更新时间
 // 失败：标记后端断开
 // 这个函数每秒调用一次（见页面底部 setInterval）
 // ------------------------------------------------------------
@@ -535,8 +544,9 @@ async function updateSensor() {
     try {
         const response = await fetch("/api/sensor");
         const data = await response.json();
-        els.temp.innerText = data.temperature;
-        els.light.innerText = data.light_percent;
+        els.temp.innerText = formatMetric(data.temperature);
+        els.humidity.innerText = formatMetric(data.humidity);
+        els.light.innerText = formatMetric(data.light_percent);
         setBackendOnline(true);
         if (els.lastUpdateTime) {
             els.lastUpdateTime.innerText = formatTime(new Date());
