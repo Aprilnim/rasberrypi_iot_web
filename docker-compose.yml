@@ -20,6 +20,12 @@ services:
     environment:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-}
       - LORA_HMAC_SECRET=${LORA_HMAC_SECRET:-}
+      - CSRF_SIGNING_SECRET=${CSRF_SIGNING_SECRET:-}
+      - DEVICE_TRANSPORT=legacy_lora
+      - MQTT_HOST=${MQTT_HOST:-192.168.10.70}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_BACKEND_USERNAME=${MQTT_BACKEND_USERNAME:-backend}
+      - MQTT_BACKEND_PASSWORD=${MQTT_BACKEND_PASSWORD:-}
 
     restart: unless-stopped
 

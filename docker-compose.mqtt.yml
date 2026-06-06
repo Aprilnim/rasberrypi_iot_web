@@ -1,0 +1,28 @@
+services:
+  # MQTT 模式下 FastAPI 只访问 MQTT 和 SQLite，移除全部硬件设备权限。
+  backend:
+    devices: !reset []
+    group_add: !reset []
+    environment:
+      - DEVICE_TRANSPORT=mqtt
+
+  lora-gateway:
+    build: ./lora_gateway
+    container_name: yl40-lora-gateway
+
+    devices:
+      - "/dev/ttyS0:/dev/ttyS0"
+      - "/dev/gpiomem:/dev/gpiomem"
+
+    group_add:
+      - "986"
+      - "20"
+
+    environment:
+      - MQTT_HOST=${MQTT_HOST:-192.168.10.70}
+      - MQTT_PORT=${MQTT_PORT:-1883}
+      - MQTT_GATEWAY_USERNAME=${MQTT_GATEWAY_USERNAME:-lora-gateway}
+      - MQTT_GATEWAY_PASSWORD=${MQTT_GATEWAY_PASSWORD:-}
+      - LORA_HMAC_SECRET=${LORA_HMAC_SECRET:-}
+
+    restart: unless-stopped

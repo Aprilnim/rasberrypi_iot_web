@@ -1,0 +1,56 @@
+%% EMQX 5.x file authorizer example for yl40iot/v1.
+%% Paste into Dashboard -> Access Control -> Authorization -> File settings.
+
+%% A retained hardware command must never be accepted, regardless of user.
+{deny, all, {publish, {retain, true}}, [
+  "yl40iot/v1/nodes/pi-b/commands/+/set"
+]}.
+
+%% FastAPI backend publishes commands and its own availability.
+{allow, {user, "backend"}, {publish, {retain, false}}, [
+  "yl40iot/v1/nodes/pi-b/commands/+/set"
+]}.
+{allow, {user, "backend"}, publish, [
+  "yl40iot/v1/services/backend/availability"
+]}.
+{allow, {user, "backend"}, subscribe, [
+  "yl40iot/v1/nodes/pi-b/telemetry/#",
+  "yl40iot/v1/nodes/pi-b/state/#",
+  "yl40iot/v1/nodes/pi-b/commands/+/result",
+  "yl40iot/v1/nodes/pi-b/availability",
+  "yl40iot/v1/nodes/pi-b/heartbeat",
+  "yl40iot/v1/nodes/pi-b/events/#",
+  "yl40iot/v1/nodes/pi-c/telemetry/#",
+  "yl40iot/v1/nodes/pi-c/availability",
+  "yl40iot/v1/nodes/pi-c/heartbeat",
+  "yl40iot/v1/nodes/pi-c/events/#",
+  "yl40iot/v1/gateways/lora-a/availability",
+  "yl40iot/v1/gateways/lora-a/heartbeat",
+  "yl40iot/v1/gateways/lora-a/events/#"
+]}.
+
+%% LoRa gateway receives only Pi B commands and publishes only gateway/Pi B data.
+{allow, {user, "lora-gateway"}, subscribe, [
+  "yl40iot/v1/nodes/pi-b/commands/+/set"
+]}.
+{allow, {user, "lora-gateway"}, publish, [
+  "yl40iot/v1/nodes/pi-b/telemetry/#",
+  "yl40iot/v1/nodes/pi-b/state/#",
+  "yl40iot/v1/nodes/pi-b/commands/+/result",
+  "yl40iot/v1/nodes/pi-b/availability",
+  "yl40iot/v1/nodes/pi-b/heartbeat",
+  "yl40iot/v1/nodes/pi-b/events/#",
+  "yl40iot/v1/gateways/lora-a/availability",
+  "yl40iot/v1/gateways/lora-a/heartbeat",
+  "yl40iot/v1/gateways/lora-a/events/#"
+]}.
+
+%% Pi C can publish only its own telemetry and status.
+{allow, {user, "pi-c"}, publish, [
+  "yl40iot/v1/nodes/pi-c/telemetry/#",
+  "yl40iot/v1/nodes/pi-c/availability",
+  "yl40iot/v1/nodes/pi-c/heartbeat",
+  "yl40iot/v1/nodes/pi-c/events/#"
+]}.
+
+{deny, all}.

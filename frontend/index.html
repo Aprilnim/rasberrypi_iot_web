@@ -8,14 +8,6 @@
     <link rel="stylesheet" href="style.css?v=20260604-auth-toast">
 </head>
 <body>
-    <script>
-        (function () {
-            const savedTheme = localStorage.getItem("theme");
-            const systemLight = window.matchMedia &&
-                window.matchMedia("(prefers-color-scheme: light)").matches;
-            document.body.dataset.theme = savedTheme || (systemLight ? "light" : "dark");
-        })();
-    </script>
     <div class="container">
         <header class="page-header">
             <div class="header-left">
@@ -289,6 +281,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20260604-auth-toast"></script>
+    <script src="app.js?v=20260605-csp"></script>
 </body>
 </html>

@@ -27,6 +27,8 @@ It contains:
   - Proxies `/api/` to backend
 - `docker-compose.yml`：Docker Compose deployment config
 - `receiver_b.py`：Standalone receiver script for Raspberry Pi B (not in Docker)
+- `backend/pi_b_node.py`：MQTT migration mode Pi B node; never connects to MQTT
+- `lora_gateway/lora_mqtt.py`：MQTT/LoRa bridge and the only Pi A LoRa serial owner in MQTT mode
 
 Target device:
 
@@ -35,6 +37,17 @@ Target device:
 - Linux / Debian
 - Docker Compose
 - Requires I2C (`/dev/i2c-1`), serial (`/dev/ttyS0`), and GPIO access
+
+## MQTT Migration Mode
+
+- Select exactly one transport with `DEVICE_TRANSPORT=legacy_lora|mqtt`.
+- `legacy_lora` remains the default rollback mode.
+- In `mqtt` mode FastAPI must not open GPIO, I2C, RS485, or LoRa serial devices.
+- In `mqtt` mode `lora-gateway` is the only Pi A process allowed to open `/dev/ttyS0`.
+- Raspberry Pi B never connects to MQTT; `pi_b_node.py` sends YL40 telemetry and receives commands only through LoRa.
+- MQTT topics use the `yl40iot/v1/` prefix.
+- MQTT control commands must never be retained.
+- Do not automatically fall back from MQTT control to direct LoRa control.
 
 ## Important Rules for AI Agent
 

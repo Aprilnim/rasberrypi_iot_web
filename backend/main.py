@@ -37,6 +37,11 @@ import threading
 import time
 from urllib.parse import urlparse
 
+# 渐进式迁移开关：默认保留旧 LoRa 链路，设置为 mqtt 后 FastAPI 不再打开硬件设备。
+DEVICE_TRANSPORT = os.environ.get("DEVICE_TRANSPORT", "legacy_lora").strip().lower()
+if DEVICE_TRANSPORT not in ("legacy_lora", "mqtt"):
+    raise RuntimeError("DEVICE_TRANSPORT must be legacy_lora or mqtt")
+
 # ------------------------------------------------------------
 # 创建 FastAPI 应用实例
 # add_middleware(CORSMiddleware, ...):
@@ -66,7 +71,7 @@ app.add_middleware(
 # 树莓派默认 I2C 接口是总线 1，设备文件 /dev/i2c-1
 # 这个 bus 对象后面 get_adc() 函数会反复使用它读取传感器
 # ------------------------------------------------------------
-bus = smbus.SMBus(1)
+bus = smbus.SMBus(1) if DEVICE_TRANSPORT == "legacy_lora" else None
 
 # PCF8591 ADC 芯片的 I2C 地址（硬件固定， datasheet 上写 0x48）
 ADDR = 0x48
@@ -82,6 +87,8 @@ CSRF_COOKIE_NAME = "csrf_token"
 AUTH_COOKIE_PATH = "/api"
 CSRF_COOKIE_PATH = "/"
 CSRF_SIGNING_SECRET = os.environ.get("CSRF_SIGNING_SECRET") or "yl40iot-csrf-v1"
+if not os.environ.get("CSRF_SIGNING_SECRET"):
+    print("[Security] WARNING: CSRF_SIGNING_SECRET is not set; using development default")
 
 # 登录失败限流只放内存里：当前项目是单后端容器，简单可靠，也不需要改数据库。
 LOGIN_RATE_WINDOW_SECONDS = 60
@@ -111,13 +118,20 @@ control_last_action_at = {}
 # lora = None，后续所有 LoRa 操作都会优雅降级返回错误
 # ------------------------------------------------------------
 from lora import LoRaNode
+from mqtt_service import MQTTService
 
-try:
-    lora = LoRaNode()
-    print(f"[LoRa] Available = {lora.available}")
-except Exception as e:
-    print(f"[LoRa] Failed to initialize: {e}")
-    lora = None
+lora = None
+mqtt_service = None
+
+if DEVICE_TRANSPORT == "legacy_lora":
+    try:
+        lora = LoRaNode()
+        print(f"[LoRa] Available = {lora.available}")
+    except Exception as e:
+        print(f"[LoRa] Failed to initialize: {e}")
+else:
+    mqtt_service = MQTTService()
+    print("[MQTT] Device transport enabled; FastAPI hardware access disabled")
 
 
 # ------------------------------------------------------------
@@ -537,6 +551,8 @@ if lora is not None and lora.available:
 # 返回值：0~255 的整数，或 None（I2C 通信失败时）
 # ------------------------------------------------------------
 def get_adc(ch):
+    if bus is None:
+        return None
     try:
         # 选择ADC通道（向芯片写入通道号）
         bus.write_byte(ADDR, ch)
@@ -691,17 +707,17 @@ def get_sensor_cache_snapshot():
     return data
 
 
-try:
-    # 服务启动时先同步采样一次，尽量避免第一次 /sensor 请求拿到空缓存。
-    update_sensor_cache_once()
-except Exception as e:
-    with sensor_cache_lock:
-        sensor_cache["error"] = str(e)
+if DEVICE_TRANSPORT == "legacy_lora":
+    try:
+        # 服务启动时先同步采样一次，尽量避免第一次 /sensor 请求拿到空缓存。
+        update_sensor_cache_once()
+    except Exception as e:
+        with sensor_cache_lock:
+            sensor_cache["error"] = str(e)
 
-# 启动后台传感器采样线程。
-# daemon=True 表示主进程退出时线程自动结束，不阻塞容器关闭。
-threading.Thread(target=sensor_cache_loop, daemon=True).start()
-print("[Sensor] Cache thread started")
+    # MQTT 模式下传感器来自消息缓存，禁止 FastAPI 读取本地 I2C。
+    threading.Thread(target=sensor_cache_loop, daemon=True).start()
+    print("[Sensor] Cache thread started")
 
 
 # ============================================================
@@ -719,7 +735,8 @@ def root():
 
     return {
         "status": "running",
-        "device": "YL-40"
+        "device": "YL-40",
+        "device_transport": DEVICE_TRANSPORT,
     }
 
 
@@ -927,7 +944,7 @@ def get_control_logs(
 @app.get("/temp")
 def temp():
     # 读取缓存快照，避免高并发请求重复读硬件。
-    data = get_sensor_cache_snapshot()
+    data = mqtt_service.get_sensor_snapshot() if DEVICE_TRANSPORT == "mqtt" else get_sensor_cache_snapshot()
 
     return {
         "temperature": data["temperature"],
@@ -952,7 +969,7 @@ def temp():
 @app.get("/light")
 def light():
     # 读取缓存快照，避免高并发请求重复读硬件。
-    data = get_sensor_cache_snapshot()
+    data = mqtt_service.get_sensor_snapshot() if DEVICE_TRANSPORT == "mqtt" else get_sensor_cache_snapshot()
 
     return {
         "light_percent": data["light_percent"],
@@ -975,10 +992,11 @@ def light():
 @app.get("/sensor")
 def sensor():
     # 读取缓存快照，避免多人同时刷新页面时反复读 I2C。
-    data = get_sensor_cache_snapshot()
+    data = mqtt_service.get_sensor_snapshot() if DEVICE_TRANSPORT == "mqtt" else get_sensor_cache_snapshot()
 
     return {
         "temperature": data["temperature"],
+        "humidity": data.get("humidity"),
         "light_percent": data["light_percent"],
         "cached": True,
         "updated_at": data["updated_at"],
@@ -997,6 +1015,8 @@ def sensor():
 # ------------------------------------------------------------
 @app.get("/led")
 def get_led():
+    if DEVICE_TRANSPORT == "mqtt":
+        return mqtt_service.get_device_snapshot("led")
     if lora is None or not lora.available:
         return {"on": False, "available": False}
     state = lora.get_device_state_snapshot()
@@ -1035,6 +1055,27 @@ def set_led(
     action = "ON" if state.on else "OFF"
     require_csrf_token(request, user)
     check_control_rate_limit(user, "LED")
+
+    if DEVICE_TRANSPORT == "mqtt":
+        try:
+            result = mqtt_service.send_device_command("led", action.lower())
+        except Exception as e:
+            result = {"success": False, "message": f"MQTT control error: {e}"}
+        write_control_log(
+            user=user,
+            request=request,
+            device="LED",
+            action=action,
+            result="SUCCESS" if result["success"] else "FAILED",
+            error=None if result["success"] else result["message"],
+        )
+        snapshot = mqtt_service.get_device_snapshot("led")
+        return {
+            "on": snapshot["on"] if not result["success"] else state.on,
+            "available": snapshot["available"],
+            "error": None if result["success"] else result["message"],
+            "cmd_id": result.get("cmd_id"),
+        }
 
     if lora is None or not lora.available:
         write_control_log(
@@ -1081,6 +1122,8 @@ def set_led(
 # ------------------------------------------------------------
 @app.get("/fan")
 def get_fan():
+    if DEVICE_TRANSPORT == "mqtt":
+        return mqtt_service.get_device_snapshot("fan")
     if lora is None or not lora.available:
         return {"on": False, "available": False}
     state = lora.get_device_state_snapshot()
@@ -1114,6 +1157,27 @@ def set_fan(
     action = "ON" if state.on else "OFF"
     require_csrf_token(request, user)
     check_control_rate_limit(user, "FAN")
+
+    if DEVICE_TRANSPORT == "mqtt":
+        try:
+            result = mqtt_service.send_device_command("fan", action.lower())
+        except Exception as e:
+            result = {"success": False, "message": f"MQTT control error: {e}"}
+        write_control_log(
+            user=user,
+            request=request,
+            device="FAN",
+            action=action,
+            result="SUCCESS" if result["success"] else "FAILED",
+            error=None if result["success"] else result["message"],
+        )
+        snapshot = mqtt_service.get_device_snapshot("fan")
+        return {
+            "on": snapshot["on"] if not result["success"] else state.on,
+            "available": snapshot["available"],
+            "error": None if result["success"] else result["message"],
+            "cmd_id": result.get("cmd_id"),
+        }
 
     if lora is None or not lora.available:
         write_control_log(
@@ -1190,6 +1254,8 @@ def get_uptime():
 # ------------------------------------------------------------
 @app.get("/lora/status")
 def lora_status():
+    if DEVICE_TRANSPORT == "mqtt":
+        return mqtt_service.get_lora_status()
     with heartbeat_lock:
         if lora is None or not lora.available:
             return {

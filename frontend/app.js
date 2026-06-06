@@ -9,6 +9,14 @@
 // ============================================================
 
 
+(function initializeThemeBeforeBinding() {
+    const savedTheme = localStorage.getItem("theme");
+    const systemLight = window.matchMedia &&
+        window.matchMedia("(prefers-color-scheme: light)").matches;
+    document.body.dataset.theme = savedTheme || (systemLight ? "light" : "dark");
+})();
+
+
 // ------------------------------------------------------------
 // els：页面 DOM 元素缓存
 // 把常用的 HTML 元素一次性取出来，避免每次操作都重复 getElementById
