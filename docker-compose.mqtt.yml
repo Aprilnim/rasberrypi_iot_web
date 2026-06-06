@@ -16,6 +16,7 @@ services:
 
     volumes:
       - "/proc/device-tree:/proc/device-tree:ro"
+      - "/sys/firmware/devicetree/base:/sys/firmware/devicetree/base:ro"
 
     group_add:
       - "986"
