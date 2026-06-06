@@ -28,5 +28,8 @@ services:
       - MQTT_GATEWAY_USERNAME=${MQTT_GATEWAY_USERNAME:-lora-gateway}
       - MQTT_GATEWAY_PASSWORD=${MQTT_GATEWAY_PASSWORD:-}
       - LORA_HMAC_SECRET=${LORA_HMAC_SECRET:-}
+      # rpi-lgpio 在 Docker 内可能读不到 /proc/device-tree/system/linux,revision，
+      # 显式提供 Pi 4 revision，避免误判为“不是 Raspberry Pi”。
+      - RPI_LGPIO_REVISION=${RPI_LGPIO_REVISION:-c03115}
 
     restart: unless-stopped
