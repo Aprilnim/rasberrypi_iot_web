@@ -1,10 +1,10 @@
 // ============================================================
 // 前端 JavaScript —— YL-40 IoT 监控台
 // 功能：
-//   1. 每秒从后端获取 SHT35 温湿度与 YL40 光照缓存并刷新显示
+//   1. 通过 SSE + HTTP 兜底刷新 SHT35 温湿度与 YL40 光照缓存
 //   2. 通过 LED 开关按钮控制树莓派 B 的 GPIO18 LED
 //   3. 通过风扇开关按钮控制树莓派 B 的 GPIO24 风扇继电器
-//   4. 每 3 秒查询一次 LoRa 心跳状态，判断树莓派 B 是否在线
+//   4. 通过 SSE + 每 3 秒 HTTP 兜底判断树莓派 B 是否在线
 //   5. 操作日志记录（LED/风扇 开关、网络错误等）
 // ============================================================
 
@@ -80,6 +80,7 @@ let uptimePolling = false;
 let loraPolling = false;
 let deviceStatesPolling = false;
 let loraOfflineStreak = 0;
+let stateEvents = null;
 const CONTROL_MIN_PENDING_MS = 1500;
 const CONTROL_SUCCESS_SYNC_DELAY_MS = 3000;
 const CONTROL_FAILURE_CONFIRM_DELAY_MS = 1000;
@@ -640,12 +641,23 @@ function setLoraOnline(online) {
 }
 
 // ------------------------------------------------------------
+// applySensorData(data)
+// 统一渲染 SHT35 温湿度 + YL40 光照。
+// HTTP 轮询和 SSE 推送都走这里，避免两套更新逻辑互相漂移。
+// ------------------------------------------------------------
+function applySensorData(data) {
+    els.temp.innerText = formatMetric(data.temperature);
+    els.humidity.innerText = formatMetric(data.humidity);
+    els.light.innerText = formatMetric(data.light_percent);
+    setBackendOnline(true);
+    if (els.lastUpdateTime) {
+        els.lastUpdateTime.innerText = formatTime(new Date());
+    }
+}
+
+// ------------------------------------------------------------
 // updateSensor()
-// 异步获取传感器数据（SHT35 温湿度 + YL40 光照）
-// 请求路径：/api/sensor（nginx 代理到后端 /sensor）
-// 成功：把 temperature、humidity 和 light_percent 显示到页面上，标记后端在线，记录更新时间
-// 失败：标记后端断开
-// 这个函数每秒调用一次（见页面底部 setInterval）
+// 异步获取传感器缓存。SSE 会实时推送，HTTP 轮询降为 5 秒兜底。
 // ------------------------------------------------------------
 async function updateSensor() {
     if (sensorPolling) return;
@@ -654,13 +666,7 @@ async function updateSensor() {
     try {
         const response = await fetch("/api/sensor");
         const data = await response.json();
-        els.temp.innerText = formatMetric(data.temperature);
-        els.humidity.innerText = formatMetric(data.humidity);
-        els.light.innerText = formatMetric(data.light_percent);
-        setBackendOnline(true);
-        if (els.lastUpdateTime) {
-            els.lastUpdateTime.innerText = formatTime(new Date());
-        }
+        applySensorData(data);
     } catch (err) {
         setBackendOnline(false);
     } finally {
@@ -687,6 +693,17 @@ function updateLedVisual(isOn) {
     }
 }
 
+function applyLedData(data) {
+    if (ledControlPending || Date.now() < ledControlProtectUntil) return;
+
+    if (!data.available) {
+        els.ledStatus.innerText = "不可用";
+        return;
+    }
+    els.ledSwitch.checked = Boolean(data.on);
+    updateLedVisual(Boolean(data.on));
+}
+
 // ------------------------------------------------------------
 // updateLed()
 // 从后端缓存同步 LED 当前状态
@@ -702,12 +719,7 @@ async function updateLed() {
     try {
         const response = await fetch("/api/led");
         const data = await response.json();
-        if (!data.available) {
-            els.ledStatus.innerText = "不可用";
-            return;
-        }
-        els.ledSwitch.checked = data.on;
-        updateLedVisual(data.on);
+        applyLedData(data);
     } catch (err) {
         // 初始化时失败静默处理，不弹报错
     }
@@ -796,6 +808,17 @@ function updateFanVisual(isOn) {
     }
 }
 
+function applyFanData(data) {
+    if (fanControlPending || Date.now() < fanControlProtectUntil) return;
+
+    if (!data.available) {
+        els.fanStatus.innerText = "不可用";
+        return;
+    }
+    els.fanSwitch.checked = Boolean(data.on);
+    updateFanVisual(Boolean(data.on));
+}
+
 // ------------------------------------------------------------
 // updateFan()
 // 从后端缓存同步风扇当前状态
@@ -811,12 +834,7 @@ async function updateFan() {
     try {
         const response = await fetch("/api/fan");
         const data = await response.json();
-        if (!data.available) {
-            els.fanStatus.innerText = "不可用";
-            return;
-        }
-        els.fanSwitch.checked = data.on;
-        updateFanVisual(data.on);
+        applyFanData(data);
     } catch (err) {
         // 初始化时失败静默处理
     }
@@ -901,6 +919,29 @@ async function updateDeviceStates() {
     }
 }
 
+function applyDeviceData(data) {
+    if (data.led) {
+        applyLedData(data.led);
+    }
+    if (data.fan) {
+        applyFanData(data.fan);
+    }
+}
+
+function applyLoraData(data) {
+    if (data.online) {
+        loraOfflineStreak = 0;
+        setLoraOnline(true);
+        setBackendOnline(true);
+    } else {
+        setBackendOnline(true);
+        loraOfflineStreak += 1;
+        if (loraOfflineStreak >= 2) {
+            setLoraOnline(false);
+        }
+    }
+}
+
 // ------------------------------------------------------------
 // updateLoraStatus()
 // 每 3 秒查询一次 LoRa 心跳状态
@@ -920,17 +961,7 @@ async function updateLoraStatus() {
     try {
         const response = await fetch("/api/lora/status");
         const data = await response.json();
-        if (data.online) {
-            loraOfflineStreak = 0;
-            setLoraOnline(true);
-            setBackendOnline(true);
-        } else {
-            setBackendOnline(true);
-            loraOfflineStreak += 1;
-            if (loraOfflineStreak >= 2) {
-                setLoraOnline(false);
-            }
-        }
+        applyLoraData(data);
     } catch (err) {
         loraOfflineStreak += 1;
         if (loraOfflineStreak >= 2) {
@@ -940,6 +971,51 @@ async function updateLoraStatus() {
     } finally {
         loraPolling = false;
     }
+}
+
+function connectStateEvents() {
+    if (!window.EventSource) {
+        addLog("当前浏览器不支持实时状态推送，使用轮询模式", "info");
+        return;
+    }
+
+    if (stateEvents) {
+        stateEvents.close();
+    }
+
+    stateEvents = new EventSource("/api/events");
+
+    stateEvents.addEventListener("sensor", (event) => {
+        try {
+            applySensorData(JSON.parse(event.data));
+        } catch (err) {
+            // 忽略异常推送，HTTP 轮询会继续兜底。
+        }
+    });
+
+    stateEvents.addEventListener("device", (event) => {
+        try {
+            applyDeviceData(JSON.parse(event.data));
+        } catch (err) {
+            // 忽略异常推送，HTTP 轮询会继续兜底。
+        }
+    });
+
+    stateEvents.addEventListener("lora", (event) => {
+        try {
+            applyLoraData(JSON.parse(event.data));
+        } catch (err) {
+            // 忽略异常推送，HTTP 轮询会继续兜底。
+        }
+    });
+
+    stateEvents.addEventListener("open", () => {
+        setBackendOnline(true);
+    });
+
+    stateEvents.addEventListener("error", () => {
+        // EventSource 会自动重连；这里不立刻标离线，避免网络抖动造成误闪。
+    });
 }
 
 // ------------------------------------------------------------
@@ -981,10 +1057,10 @@ themeQuery.addEventListener("change", syncSystemTheme);
 // 页面初始化
 // 顺序：
 // 1. 记录系统启动日志
-// 2. 立即获取一次传感器数据
-// 3. 启动定时器，每秒自动刷新传感器
+// 2. 建立 SSE 实时状态通道
+// 3. 立即获取一次传感器数据
 // 4. 立即获取一次 LED/FAN 当前状态
-// 5. 每 2 秒从后端缓存同步 LED/FAN 状态，支持多浏览器状态一致
+// 5. 每 1 秒从后端缓存同步 LED/FAN 状态，作为 SSE 兜底
 // 6. 立即获取一次 LoRa 连接状态
 // 7. 启动定时器，每 3 秒自动刷新 LoRa 状态
 // 8. 启动定时器，每秒刷新系统运行时长
@@ -993,10 +1069,11 @@ applyTheme(getPreferredTheme());
 syncAuthState();
 renderAuditLoggedOut();
 addLog("系统初始化完成，开始连接设备...", "info");
+connectStateEvents();
 updateSensor();
-setInterval(updateSensor, 1000);
+setInterval(updateSensor, 5000);
 updateDeviceStates();
-setInterval(updateDeviceStates, 2000);
+setInterval(updateDeviceStates, 1000);
 updateLoraStatus();
 setInterval(updateLoraStatus, 3000);
 updateUptimeFromBackend();

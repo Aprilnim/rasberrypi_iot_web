@@ -1,5 +1,6 @@
 import json
 import os
+import queue
 import threading
 import time
 import uuid
@@ -38,6 +39,8 @@ class MQTTService:
         self._lock = threading.Lock()
         self._connected = False
         self._pending_commands = {}
+        self._sse_lock = threading.Lock()
+        self._sse_clients = set()
         self._cache = {
             "yl40": {
                 "light_percent": None,
@@ -101,6 +104,19 @@ class MQTTService:
         return max(0, int((time.time() - updated_at) * 1000))
 
     @staticmethod
+    def _queue_sse_event(client_queue, event, data):
+        item = {"event": event, "data": data}
+        while True:
+            try:
+                client_queue.put_nowait(item)
+                return
+            except queue.Full:
+                try:
+                    client_queue.get_nowait()
+                except queue.Empty:
+                    return
+
+    @staticmethod
     def _decode_payload(message):
         try:
             data = json.loads(message.payload.decode("utf-8"))
@@ -155,6 +171,7 @@ class MQTTService:
             return
 
         now = time.time()
+        events = []
         with self._lock:
             if message.topic == f"{PI_C_PREFIX}/telemetry/yl40":
                 self._cache["yl40"].update(
@@ -165,6 +182,7 @@ class MQTTService:
                         "error": None,
                     }
                 )
+                events.append(("sensor", self._get_sensor_snapshot_locked()))
             elif message.topic == f"{PI_C_PREFIX}/telemetry/sht35":
                 self._cache["sht35"].update(
                     {
@@ -176,6 +194,7 @@ class MQTTService:
                         "error": None,
                     }
                 )
+                events.append(("sensor", self._get_sensor_snapshot_locked()))
             elif message.topic in (
                 f"{PI_B_PREFIX}/state/led",
                 f"{PI_B_PREFIX}/state/fan",
@@ -191,10 +210,15 @@ class MQTTService:
                             "error": None,
                         }
                     )
+                    events.append(("device", self._get_device_states_snapshot_locked()))
             elif message.topic.endswith("/availability"):
                 self._update_availability(message.topic, data, now)
+                events.append(("lora", self._get_lora_status_locked()))
+                events.append(("device", self._get_device_states_snapshot_locked()))
             elif message.topic.endswith("/heartbeat"):
                 self._update_heartbeat(message.topic, now)
+                events.append(("lora", self._get_lora_status_locked()))
+                events.append(("device", self._get_device_states_snapshot_locked()))
             elif message.topic.endswith("/result"):
                 cmd_id = data.get("cmd_id")
                 pending = self._pending_commands.get(cmd_id)
@@ -209,9 +233,14 @@ class MQTTService:
             elif message.topic.endswith("/events/error"):
                 if message.topic == f"{PI_C_PREFIX}/events/error" and data.get("device") == "yl40":
                     self._cache["yl40"]["error"] = data.get("error") or "pi-c YL40 error"
+                    events.append(("sensor", self._get_sensor_snapshot_locked()))
                 elif message.topic == f"{PI_C_PREFIX}/events/error" and data.get("device") == "sht35":
                     self._cache["sht35"]["error"] = data.get("error") or "pi-c SHT35 error"
+                    events.append(("sensor", self._get_sensor_snapshot_locked()))
                 print(f"[MQTT] Device error on {message.topic}: {data.get('error')}")
+
+        for event, event_data in events:
+            self.broadcast_sse_event(event, event_data)
 
     def _update_availability(self, topic, data, now):
         online = data.get("online") is True
@@ -247,12 +276,11 @@ class MQTTService:
         grace_ms = HEARTBEAT_GRACE_MS.get(key, 5000)
         return state["online"] and age_ms is not None and age_ms <= grace_ms
 
-    def get_sensor_snapshot(self):
-        with self._lock:
-            yl40 = dict(self._cache["yl40"])
-            sht35 = dict(self._cache["sht35"])
-            pi_b_online = self._node_online_locked("pi_b")
-            pi_c_online = self._node_online_locked("pi_c")
+    def _get_sensor_snapshot_locked(self):
+        yl40 = dict(self._cache["yl40"])
+        sht35 = dict(self._cache["sht35"])
+        pi_b_online = self._node_online_locked("pi_b")
+        pi_c_online = self._node_online_locked("pi_c")
 
         updated_values = [
             value for value in (yl40["updated_at"], sht35["updated_at"]) if value is not None
@@ -281,12 +309,11 @@ class MQTTService:
             "pi_c_online": pi_c_online,
         }
 
-    def get_device_snapshot(self, device):
-        with self._lock:
-            state = dict(self._cache[device])
-            pi_b_online = self._node_online_locked("pi_b")
-            gateway_online = self._node_online_locked("gateway")
-        available = self.connected and pi_b_online and gateway_online
+    def _get_device_snapshot_locked(self, device):
+        state = dict(self._cache[device])
+        pi_b_online = self._node_online_locked("pi_b")
+        gateway_online = self._node_online_locked("gateway")
+        available = self._connected and pi_b_online and gateway_online
         return {
             "on": state["on"],
             "available": available,
@@ -297,21 +324,62 @@ class MQTTService:
             "error": state["error"] if available else "MQTT gateway or pi-b offline",
         }
 
-    def get_lora_status(self):
-        with self._lock:
-            pi_b = dict(self._cache["pi_b"])
-            gateway = dict(self._cache["gateway"])
-            pi_b_online = self._node_online_locked("pi_b")
-            gateway_online = self._node_online_locked("gateway")
-        online = self.connected and pi_b_online and gateway_online
+    def _get_device_states_snapshot_locked(self):
+        return {
+            "led": self._get_device_snapshot_locked("led"),
+            "fan": self._get_device_snapshot_locked("fan"),
+        }
+
+    def _get_lora_status_locked(self):
+        pi_b = dict(self._cache["pi_b"])
+        gateway = dict(self._cache["gateway"])
+        pi_b_online = self._node_online_locked("pi_b")
+        gateway_online = self._node_online_locked("gateway")
+        online = self._connected and pi_b_online and gateway_online
         return {
             "online": online,
             "fail_count": 0 if online else 1,
             "last_pong_time": pi_b["heartbeat_at"],
             "gateway_online": gateway_online,
-            "broker_online": self.connected,
+            "broker_online": self._connected,
             "message": "设备在线" if online else "设备连接失败",
         }
+
+    def get_sensor_snapshot(self):
+        with self._lock:
+            return self._get_sensor_snapshot_locked()
+
+    def get_device_snapshot(self, device):
+        with self._lock:
+            return self._get_device_snapshot_locked(device)
+
+    def get_lora_status(self):
+        with self._lock:
+            return self._get_lora_status_locked()
+
+    def register_sse_client(self):
+        client_queue = queue.Queue(maxsize=8)
+        with self._sse_lock:
+            self._sse_clients.add(client_queue)
+        with self._lock:
+            initial_events = [
+                ("sensor", self._get_sensor_snapshot_locked()),
+                ("device", self._get_device_states_snapshot_locked()),
+                ("lora", self._get_lora_status_locked()),
+            ]
+        for event, data in initial_events:
+            self._queue_sse_event(client_queue, event, data)
+        return client_queue
+
+    def unregister_sse_client(self, client_queue):
+        with self._sse_lock:
+            self._sse_clients.discard(client_queue)
+
+    def broadcast_sse_event(self, event, data):
+        with self._sse_lock:
+            clients = list(self._sse_clients)
+        for client_queue in clients:
+            self._queue_sse_event(client_queue, event, data)
 
     def send_device_command(self, device, state):
         device = device.lower()

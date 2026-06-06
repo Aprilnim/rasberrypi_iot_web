@@ -3,6 +3,7 @@
 
 import json
 import os
+import threading
 import time
 
 import paho.mqtt.client as mqtt
@@ -18,6 +19,9 @@ MQTT_PASSWORD = os.environ.get("MQTT_PI_C_PASSWORD", "123")
 SERIAL_PORT = os.environ.get("SHT35_SERIAL_PORT", "/dev/ttyS0")
 I2C_BUS = int(os.environ.get("YL40_I2C_BUS", "1"))
 PCF8591_ADDR = int(os.environ.get("YL40_PCF8591_ADDR", "0x48"), 0)
+YL40_INTERVAL_SECONDS = float(os.environ.get("YL40_INTERVAL_SECONDS", "0.5"))
+SHT35_INTERVAL_SECONDS = float(os.environ.get("SHT35_INTERVAL_SECONDS", "1.5"))
+HEARTBEAT_INTERVAL_SECONDS = float(os.environ.get("PI_C_HEARTBEAT_INTERVAL_SECONDS", "2"))
 REQUEST_FRAME = bytes.fromhex("01 03 00 00 00 02 C4 0B")
 START_TIME = time.time()
 
@@ -80,6 +84,90 @@ def publish_error(client, device, error):
     )
 
 
+def publish_sht35_loop(client, stop_event):
+    ser = None
+    while not stop_event.is_set():
+        started_at = time.time()
+        try:
+            if ser is None:
+                ser = serial.Serial(
+                    SERIAL_PORT,
+                    9600,
+                    bytesize=8,
+                    parity=serial.PARITY_NONE,
+                    stopbits=1,
+                    timeout=1,
+                )
+            ser.reset_input_buffer()
+            ser.write(REQUEST_FRAME)
+            ser.flush()
+            frame = ser.read(9)
+            raw_temperature, raw_humidity = parse_response(frame)
+            client.publish(
+                f"{TOPIC_PREFIX}/telemetry/sht35",
+                encode(
+                    {
+                        "node": "pi-c",
+                        "device": "sht35",
+                        "temperature": round(raw_temperature / 10.0, 1),
+                        "humidity": round(raw_humidity / 10.0, 1),
+                        "raw_temperature": raw_temperature,
+                        "raw_humidity": raw_humidity,
+                        "ts_ms": now_ms(),
+                    }
+                ),
+                qos=1,
+                retain=True,
+            )
+        except Exception as exc:
+            publish_error(client, "sht35", exc)
+            try:
+                if ser is not None:
+                    ser.close()
+            except Exception:
+                pass
+            ser = None
+
+        elapsed = time.time() - started_at
+        stop_event.wait(max(0.0, SHT35_INTERVAL_SECONDS - elapsed))
+
+
+def publish_yl40_loop(client, stop_event):
+    bus = None
+    while not stop_event.is_set():
+        started_at = time.time()
+        try:
+            if bus is None:
+                bus = smbus.SMBus(I2C_BUS)
+            raw_light = read_light_raw(bus)
+            light_percent = round(((255.0 - raw_light) / 255.0) * 100.0, 1)
+            client.publish(
+                f"{TOPIC_PREFIX}/telemetry/yl40",
+                encode(
+                    {
+                        "node": "pi-c",
+                        "device": "yl40",
+                        "light_percent": light_percent,
+                        "raw_light": raw_light,
+                        "ts_ms": now_ms(),
+                    }
+                ),
+                qos=1,
+                retain=True,
+            )
+        except Exception as exc:
+            publish_error(client, "yl40", exc)
+            try:
+                if bus is not None:
+                    bus.close()
+            except Exception:
+                pass
+            bus = None
+
+        elapsed = time.time() - started_at
+        stop_event.wait(max(0.0, YL40_INTERVAL_SECONDS - elapsed))
+
+
 def main():
     client = mqtt.Client(client_id="pi-c", clean_session=True)
     if MQTT_USERNAME:
@@ -99,76 +187,12 @@ def main():
         retain=True,
     )
 
+    stop_event = threading.Event()
+    threading.Thread(target=publish_sht35_loop, args=(client, stop_event), daemon=True).start()
+    threading.Thread(target=publish_yl40_loop, args=(client, stop_event), daemon=True).start()
+
     try:
-        bus = smbus.SMBus(I2C_BUS)
-    except Exception as exc:
-        publish_error(client, "yl40", exc)
-        bus = None
-
-    ser = None
-    while True:
-        try:
-            if ser is None:
-                ser = serial.Serial(
-                    SERIAL_PORT,
-                    9600,
-                    bytesize=8,
-                    parity=serial.PARITY_NONE,
-                    stopbits=1,
-                    timeout=1,
-                )
-
-            try:
-                ser.reset_input_buffer()
-                ser.write(REQUEST_FRAME)
-                ser.flush()
-                frame = ser.read(9)
-                raw_temperature, raw_humidity = parse_response(frame)
-                client.publish(
-                    f"{TOPIC_PREFIX}/telemetry/sht35",
-                    encode(
-                        {
-                            "node": "pi-c",
-                            "device": "sht35",
-                            "temperature": round(raw_temperature / 10.0, 1),
-                            "humidity": round(raw_humidity / 10.0, 1),
-                            "raw_temperature": raw_temperature,
-                            "raw_humidity": raw_humidity,
-                            "ts_ms": now_ms(),
-                        }
-                    ),
-                    qos=1,
-                    retain=True,
-                )
-            except Exception as exc:
-                publish_error(client, "sht35", exc)
-                try:
-                    ser.close()
-                except Exception:
-                    pass
-                ser = None
-
-            if bus is not None:
-                try:
-                    raw_light = read_light_raw(bus)
-                    light_percent = round(((255.0 - raw_light) / 255.0) * 100.0, 1)
-                    client.publish(
-                        f"{TOPIC_PREFIX}/telemetry/yl40",
-                        encode(
-                            {
-                                "node": "pi-c",
-                                "device": "yl40",
-                                "light_percent": light_percent,
-                                "raw_light": raw_light,
-                                "ts_ms": now_ms(),
-                            }
-                        ),
-                        qos=1,
-                        retain=True,
-                    )
-                except Exception as exc:
-                    publish_error(client, "yl40", exc)
-
+        while True:
             client.publish(
                 f"{TOPIC_PREFIX}/heartbeat",
                 encode(
@@ -182,9 +206,18 @@ def main():
                 qos=0,
                 retain=False,
             )
-        except Exception as exc:
-            publish_error(client, "pi-c", exc)
-        time.sleep(2)
+            time.sleep(HEARTBEAT_INTERVAL_SECONDS)
+    except KeyboardInterrupt:
+        stop_event.set()
+    finally:
+        client.publish(
+            f"{TOPIC_PREFIX}/availability",
+            encode({"node": "pi-c", "online": False, "ts_ms": now_ms()}),
+            qos=1,
+            retain=True,
+        )
+        client.loop_stop()
+        client.disconnect()
 
 
 if __name__ == "__main__":

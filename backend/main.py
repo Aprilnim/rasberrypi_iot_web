@@ -25,12 +25,15 @@
 # ------------------------------------------------------------
 from fastapi import Cookie, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import hashlib
 import hmac
+import json
 import smbus2 as smbus
 import math
 import os
+import queue
 import secrets
 import sqlite3
 import threading
@@ -1270,3 +1273,46 @@ def lora_status():
             "last_pong_time": last_pong_time,
             "message": "设备在线" if lora_online else "设备连接失败"
         }
+
+
+def encode_sse_event(event: str, data: dict) -> str:
+    payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+# ------------------------------------------------------------
+# GET /events
+# SSE 单向状态推送接口。它只推送原本已公开的传感器、设备和 LoRa 状态，
+# 不包含 token、用户信息或审计日志；浏览器断线后 EventSource 会自动重连。
+# ------------------------------------------------------------
+@app.get("/events")
+def state_events():
+    headers = {
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+    }
+
+    if DEVICE_TRANSPORT == "mqtt" and mqtt_service is not None:
+        client_queue = mqtt_service.register_sse_client()
+
+        def mqtt_event_stream():
+            try:
+                while True:
+                    try:
+                        item = client_queue.get(timeout=15)
+                        yield encode_sse_event(item["event"], item["data"])
+                    except queue.Empty:
+                        yield encode_sse_event("ping", {"ts": int(time.time())})
+            finally:
+                mqtt_service.unregister_sse_client(client_queue)
+
+        return StreamingResponse(mqtt_event_stream(), media_type="text/event-stream", headers=headers)
+
+    def legacy_event_stream():
+        while True:
+            yield encode_sse_event("sensor", get_sensor_cache_snapshot())
+            yield encode_sse_event("device", {"led": get_led(), "fan": get_fan()})
+            yield encode_sse_event("lora", lora_status())
+            time.sleep(5)
+
+    return StreamingResponse(legacy_event_stream(), media_type="text/event-stream", headers=headers)
