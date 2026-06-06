@@ -13,6 +13,8 @@ services:
     devices:
       - "/dev/ttyS0:/dev/ttyS0"
       - "/dev/gpiomem:/dev/gpiomem"
+      # rpi-lgpio/lgpio 通过 Linux gpiochip 访问 GPIO，不只依赖 /dev/gpiomem。
+      - "/dev/gpiochip0:/dev/gpiochip0"
 
     volumes:
       - "/proc/device-tree:/proc/device-tree:ro"
