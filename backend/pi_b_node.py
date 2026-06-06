@@ -23,6 +23,7 @@ FAN_PIN = 24
 PCF8591_ADDR = 0x48
 HMAC_SECRET = os.environ.get("LORA_HMAC_SECRET", "").strip()
 START_TIME = time.time()
+YL40_TELEMETRY_INTERVAL = 3.0
 
 if not HMAC_SECRET:
     print("[Pi B] FATAL: missing LORA_HMAC_SECRET", file=sys.stderr, flush=True)
@@ -125,6 +126,14 @@ def send_payload(ser, payload):
     return message
 
 
+def send_yl40_telemetry(ser, bus):
+    raw_light = read_light_raw(bus)
+    if raw_light is None:
+        return False
+    send_payload(ser, f"TELEMETRY,YL40,{raw_light}")
+    return True
+
+
 def main():
     global last_a_response
 
@@ -143,11 +152,15 @@ def main():
     fan_is_on = False
     handled_commands = OrderedDict()
     heartbeat_connected = False
+    last_yl40_telemetry_at = 0.0
 
     print("[Pi B] GPIO, I2C and LoRa initialized", flush=True)
     try:
         while True:
             if ser.in_waiting <= 0:
+                if time.time() - last_yl40_telemetry_at >= YL40_TELEMETRY_INTERVAL:
+                    if send_yl40_telemetry(ser, bus):
+                        last_yl40_telemetry_at = time.time()
                 time.sleep(0.02)
                 continue
 
@@ -186,6 +199,7 @@ def main():
             if payload == "QUERY,YL40":
                 raw_light = read_light_raw(bus)
                 if raw_light is not None:
+                    last_yl40_telemetry_at = time.time()
                     last_a_response = f"TELEMETRY,YL40,{raw_light}"
                     send_payload(ser, last_a_response)
                 continue

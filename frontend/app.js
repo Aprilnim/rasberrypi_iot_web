@@ -442,6 +442,16 @@ function updateLastTime(type) {
     }
 }
 
+function showLedPending(isOn) {
+    updateLedVisual(isOn);
+    els.ledStatus.innerText = isOn ? "开启中" : "关闭中";
+}
+
+function showFanPending(isOn) {
+    updateFanVisual(isOn);
+    els.fanStatus.innerText = isOn ? "开启中" : "关闭中";
+}
+
 // ------------------------------------------------------------
 // updateUptimeFromBackend()
 // 从后端获取真实的系统运行时长（Docker 容器启动后的时间）
@@ -623,6 +633,7 @@ async function toggleLed() {
     }
 
     ledControlPending = true;
+    showLedPending(newState);
     try {
         const response = await fetch("/api/led", {
             method: "POST",
@@ -634,27 +645,33 @@ async function toggleLed() {
             setAuthState(false);
             addLog(data.detail || "LED 控制需要重新登录", "error");
             els.ledSwitch.checked = !newState;
+            updateLedVisual(!newState);
             openLoginModal();
         } else if (response.status === 429) {
             addLog(data.detail || "LED 操作过于频繁，请稍后再试", "error");
             els.ledSwitch.checked = !newState;
+            updateLedVisual(!newState);
         } else if (data.error) {
             addLog(`LED 控制失败：${data.error}`, "error");
             els.ledSwitch.checked = !newState;
+            updateLedVisual(!newState);
             updateAuditLogs();
         } else if (data.available) {
             updateLedVisual(data.on);
             addLog(`LED 已${data.on ? "开启" : "关闭"}`, "action");
             updateLastTime("led");
             updateAuditLogs();
+            window.setTimeout(updateLed, 1000);
         } else {
             addLog("LED 控制失败：硬件不可用", "error");
             els.ledSwitch.checked = !newState;
+            updateLedVisual(!newState);
             updateAuditLogs();
         }
     } catch (err) {
         addLog("LED 控制失败：网络错误", "error");
         els.ledSwitch.checked = !newState;
+        updateLedVisual(!newState);
     } finally {
         ledControlPending = false;
     }
@@ -723,6 +740,7 @@ async function toggleFan() {
     }
 
     fanControlPending = true;
+    showFanPending(newState);
     try {
         const response = await fetch("/api/fan", {
             method: "POST",
@@ -734,27 +752,33 @@ async function toggleFan() {
             setAuthState(false);
             addLog(data.detail || "风扇控制需要重新登录", "error");
             els.fanSwitch.checked = !newState;
+            updateFanVisual(!newState);
             openLoginModal();
         } else if (response.status === 429) {
             addLog(data.detail || "风扇操作过于频繁，请稍后再试", "error");
             els.fanSwitch.checked = !newState;
+            updateFanVisual(!newState);
         } else if (data.error) {
             addLog(`风扇控制失败：${data.error}`, "error");
             els.fanSwitch.checked = !newState;
+            updateFanVisual(!newState);
             updateAuditLogs();
         } else if (data.available) {
             updateFanVisual(data.on);
             addLog(`风扇已${data.on ? "开启" : "关闭"}`, "action");
             updateLastTime("fan");
             updateAuditLogs();
+            window.setTimeout(updateFan, 1000);
         } else {
             addLog("风扇控制失败：硬件不可用", "error");
             els.fanSwitch.checked = !newState;
+            updateFanVisual(!newState);
             updateAuditLogs();
         }
     } catch (err) {
         addLog("风扇控制失败：网络错误", "error");
         els.fanSwitch.checked = !newState;
+        updateFanVisual(!newState);
     } finally {
         fanControlPending = false;
     }

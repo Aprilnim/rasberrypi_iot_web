@@ -32,6 +32,11 @@ MQTT_USERNAME = os.environ.get("MQTT_GATEWAY_USERNAME", "lora-gateway")
 MQTT_PASSWORD = os.environ.get("MQTT_GATEWAY_PASSWORD", "")
 MQTT_CLIENT_ID = os.environ.get("MQTT_GATEWAY_CLIENT_ID", "lora-a")
 START_TIME = time.time()
+CONTROL_ACK_RETRIES = 2
+CONTROL_ACK_TIMEOUT = 1.2
+YL40_QUERY_INTERVAL = 5.0
+STATE_QUERY_INTERVAL = 10.0
+LOCK_BUSY = object()
 
 if not HMAC_SECRET:
     raise RuntimeError("missing LORA_HMAC_SECRET")
@@ -57,6 +62,8 @@ class LoRaMQTTGateway:
         self._last_cmd_id = {"led": None, "fan": None}
         self._recent_results = OrderedDict()
         self._recent_results_lock = threading.Lock()
+        self._last_yl40_query_at = 0.0
+        self._last_state_query_at = 0.0
 
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(M0, GPIO.OUT)
@@ -254,7 +261,12 @@ class LoRaMQTTGateway:
 
         action = requested_state.upper()
         expected = f"ACK,{device.upper()},{action},{cmd_id}"
-        response = self._transact(f"CMD,{device.upper()},{action},{cmd_id}", expected, retries=3)
+        response = self._transact(
+            f"CMD,{device.upper()},{action},{cmd_id}",
+            expected,
+            retries=CONTROL_ACK_RETRIES,
+            timeout=CONTROL_ACK_TIMEOUT,
+        )
         if response:
             result = self._make_result(cmd_id, device, requested_state, "success", requested_state, None)
             self._publish_state(device, requested_state, cmd_id)
@@ -440,9 +452,12 @@ class LoRaMQTTGateway:
 
         self._response_queue.put(payload)
 
-    def _transact(self, payload, expected, retries=1, timeout=2.0):
+    def _transact(self, payload, expected, retries=1, timeout=2.0, blocking=True):
         message = self.build_message(payload)
-        with self._transaction_lock:
+        lock_acquired = self._transaction_lock.acquire(blocking=blocking)
+        if not lock_acquired:
+            return LOCK_BUSY
+        try:
             self._drain_response_queue()
             for _attempt in range(retries):
                 self.ser.write((message + "\n").encode("utf-8"))
@@ -455,7 +470,9 @@ class LoRaMQTTGateway:
                         break
                     if response == expected or response.startswith(expected + ","):
                         return response
-        return None
+            return None
+        finally:
+            self._transaction_lock.release()
 
     def _drain_response_queue(self):
         while True:
@@ -465,7 +482,6 @@ class LoRaMQTTGateway:
                 return
 
     def _heartbeat_loop(self):
-        query_counter = 0
         while not self._stop_event.wait(2):
             self.mqtt.publish(
                 f"{GATEWAY_PREFIX}/heartbeat",
@@ -493,14 +509,22 @@ class LoRaMQTTGateway:
             if self._last_b_message_at is None or time.time() - self._last_b_message_at > 5:
                 self._publish_b_availability(False)
 
-            if self._b_online:
-                if not self._transact("QUERY,YL40", "TELEMETRY,YL40", retries=1, timeout=1.2):
+            now = time.time()
+            if self._b_online and now - self._last_yl40_query_at >= YL40_QUERY_INTERVAL:
+                self._last_yl40_query_at = now
+                response = self._transact(
+                    "QUERY,YL40",
+                    "TELEMETRY,YL40",
+                    retries=1,
+                    timeout=1.2,
+                    blocking=False,
+                )
+                if response is not LOCK_BUSY and not response:
                     self._publish_pi_b_error("yl40", "YL40 query timeout")
 
-            query_counter += 1
-            if query_counter >= 2 and self._b_online:
-                query_counter = 0
-                self._transact("QUERY,STATE", "STATE", retries=1, timeout=1.2)
+            if self._b_online and now - self._last_state_query_at >= STATE_QUERY_INTERVAL:
+                self._last_state_query_at = now
+                self._transact("QUERY,STATE", "STATE", retries=1, timeout=1.2, blocking=False)
 
 
 if __name__ == "__main__":
