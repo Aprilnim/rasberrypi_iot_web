@@ -37,9 +37,12 @@ const els = {
     fanGlow: document.getElementById("fan-glow"),    // 风扇发光光晕
     fanLastTime: document.getElementById("fan-last-time"), // 风扇最近操作时间
     backendStatus: document.getElementById("backend-status"), // "后端服务" 状态行
-    deviceStatus: document.getElementById("device-status"),   // 顶部徽章内的文字
-    deviceBadge: document.getElementById("device-badge"),     // 顶部设备状态徽章（带圆点）
-    overviewDeviceStatus: document.getElementById("overview-device-status"), // 设备概览卡片里的状态
+    deviceBStatus: document.getElementById("device-b-status"),   // 顶部设备 B 状态文字
+    deviceBBadge: document.getElementById("device-b-badge"),     // 顶部设备 B 状态徽章
+    deviceCStatus: document.getElementById("device-c-status"),   // 顶部设备 C 状态文字
+    deviceCBadge: document.getElementById("device-c-badge"),     // 顶部设备 C 状态徽章
+    overviewDeviceBStatus: document.getElementById("overview-device-b-status"), // 设备概览里的设备 B 状态
+    overviewDeviceCStatus: document.getElementById("overview-device-c-status"), // 设备概览里的设备 C 状态
     lastUpdateTime: document.getElementById("last-update-time"), // 传感器最近更新时间
     uptime: document.getElementById("uptime"),       // 系统运行时长
     logList: document.getElementById("log-list"),    // 操作日志列表容器
@@ -85,8 +88,10 @@ let loraOfflineStreak = 0;
 let stateEvents = null;
 let lastBackendOnline = null;
 let lastLoraOnline = null;
+let lastPiCOnline = null;
 let lastLedOn = null;
 let lastFanOn = null;
+let displayedLight = null;
 const CONTROL_MIN_PENDING_MS = 800;
 const CONTROL_SUCCESS_SYNC_DELAY_MS = 1000;
 const CONTROL_FAILURE_CONFIRM_DELAY_MS = 1000;
@@ -128,6 +133,14 @@ const i18n = {
         deviceOverview: "设备概览",
         backendService: "后端服务",
         deviceState: "设备状态",
+        deviceB: "设备 B",
+        deviceC: "设备 C",
+        deviceBOnline: "设备 B 在线",
+        deviceBOffline: "设备 B 离线",
+        deviceBChecking: "设备 B 检测中...",
+        deviceCOnline: "设备 C 在线",
+        deviceCOffline: "设备 C 离线",
+        deviceCChecking: "设备 C 检测中...",
         lastUpdate: "最近更新",
         systemUptime: "系统运行",
         operationLog: "操作日志",
@@ -230,6 +243,14 @@ const i18n = {
         deviceOverview: "Device Overview",
         backendService: "Backend",
         deviceState: "Device State",
+        deviceB: "Device B",
+        deviceC: "Device C",
+        deviceBOnline: "Device B online",
+        deviceBOffline: "Device B offline",
+        deviceBChecking: "Checking Device B...",
+        deviceCOnline: "Device C online",
+        deviceCOffline: "Device C offline",
+        deviceCChecking: "Checking Device C...",
         lastUpdate: "Last Update",
         systemUptime: "Uptime",
         operationLog: "Operation Log",
@@ -386,6 +407,9 @@ function applyLanguage() {
     }
     if (lastLoraOnline !== null) {
         setLoraOnline(lastLoraOnline);
+    }
+    if (lastPiCOnline !== null) {
+        setPiCOnline(lastPiCOnline);
     }
     if (lastLedOn !== null && !ledControlPending) {
         updateLedVisual(lastLedOn);
@@ -869,6 +893,15 @@ function setBackendOnline(online) {
     }
 }
 
+function setDeviceBadgeState(badge, statusElement, online, onlineText, offlineText) {
+    if (statusElement) {
+        statusElement.innerText = online ? onlineText : offlineText;
+    }
+    if (!badge) return;
+    badge.classList.toggle("online", Boolean(online));
+    badge.classList.toggle("offline", !online);
+}
+
 // ------------------------------------------------------------
 // setLoraOnline(online)
 // 根据树莓派 B 的 LoRa 心跳状态，更新前端多处显示
@@ -888,27 +921,39 @@ function setLoraOnline(online) {
     if (online) {
         els.loraStatus.innerText = t("online");
         els.loraStatus.className = "info-val status-ok";
-        els.deviceStatus.innerText = t("online");
-        els.deviceBadge.classList.add("online");
-        els.deviceBadge.classList.remove("offline");
+        setDeviceBadgeState(els.deviceBBadge, els.deviceBStatus, true, t("deviceBOnline"), t("deviceBOffline"));
         els.ledSwitch.disabled = false;
         els.fanSwitch.disabled = false;
-        if (els.overviewDeviceStatus) {
-            els.overviewDeviceStatus.innerText = t("online");
-            els.overviewDeviceStatus.className = "overview-value status-ok";
+        if (els.overviewDeviceBStatus) {
+            els.overviewDeviceBStatus.innerText = t("online");
+            els.overviewDeviceBStatus.className = "overview-value status-ok";
         }
     } else {
         els.loraStatus.innerText = t("offline");
         els.loraStatus.className = "info-val status-err";
-        els.deviceStatus.innerText = t("offline");
-        els.deviceBadge.classList.add("offline");
-        els.deviceBadge.classList.remove("online");
+        setDeviceBadgeState(els.deviceBBadge, els.deviceBStatus, false, t("deviceBOnline"), t("deviceBOffline"));
         els.ledSwitch.disabled = true;
         els.fanSwitch.disabled = true;
-        if (els.overviewDeviceStatus) {
-            els.overviewDeviceStatus.innerText = t("offline");
-            els.overviewDeviceStatus.className = "overview-value status-err";
+        if (els.overviewDeviceBStatus) {
+            els.overviewDeviceBStatus.innerText = t("offline");
+            els.overviewDeviceBStatus.className = "overview-value status-err";
         }
+    }
+}
+
+function setPiCOnline(online) {
+    lastPiCOnline = Boolean(online);
+    setDeviceBadgeState(
+        els.deviceCBadge,
+        els.deviceCStatus,
+        lastPiCOnline,
+        t("deviceCOnline"),
+        t("deviceCOffline"),
+    );
+    document.body.classList.toggle("sensor-live", lastPiCOnline);
+    if (els.overviewDeviceCStatus) {
+        els.overviewDeviceCStatus.innerText = lastPiCOnline ? t("online") : t("offline");
+        els.overviewDeviceCStatus.className = `overview-value ${lastPiCOnline ? "status-ok" : "status-err"}`;
     }
 }
 
@@ -920,7 +965,17 @@ function setLoraOnline(online) {
 function applySensorData(data) {
     els.temp.innerText = formatMetric(data.temperature);
     els.humidity.innerText = formatMetric(data.humidity);
-    els.light.innerText = formatMetric(data.light_percent);
+    const latestLight = Number(data.light_percent);
+    if (data.light_percent === null || data.light_percent === undefined || Number.isNaN(latestLight)) {
+        displayedLight = null;
+        els.light.innerText = "--";
+    } else if (displayedLight === null || Math.abs(latestLight - displayedLight) >= 0.5) {
+        displayedLight = latestLight;
+        els.light.innerText = formatMetric(latestLight);
+    }
+    if (typeof data.pi_c_online === "boolean") {
+        setPiCOnline(data.pi_c_online);
+    }
     setBackendOnline(true);
     if (els.lastUpdateTime) {
         els.lastUpdateTime.innerText = formatTime(new Date());

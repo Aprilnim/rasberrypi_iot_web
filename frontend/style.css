@@ -234,6 +234,13 @@ body {
     line-height: 1;
 }
 
+.device-badges {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
 .device-badge {
     display: flex;
     align-items: center;
@@ -351,13 +358,6 @@ body {
     border: 1px solid var(--border-soft);
 }
 
-.metric-box,
-.metric-box * {
-    animation: none !important;
-    transition: none !important;
-    transform: none !important;
-}
-
 .metric-icon {
     font-size: 28px;
     margin-bottom: 10px;
@@ -381,6 +381,19 @@ body {
     color: var(--accent);
     line-height: 1;
     font-variant-numeric: tabular-nums;
+}
+
+body.sensor-live .metric-value {
+    animation: sensorValueBreath 2s ease-in-out infinite;
+}
+
+@keyframes sensorValueBreath {
+    0%, 100% {
+        text-shadow: 0 0 0 rgba(56, 189, 248, 0);
+    }
+    50% {
+        text-shadow: 0 0 16px var(--accent-glow);
+    }
 }
 
 .metric-unit {

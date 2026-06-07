@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>YL40 监控台</title>
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="style.css?v=20260607-metric-static">
+    <link rel="stylesheet" href="style.css?v=20260607-device-bc-noise">
 </head>
 <body>
     <div class="container">
@@ -25,9 +25,15 @@
                     <span class="theme-icon" id="theme-icon">☀</span>
                     <span id="theme-label">浅色</span>
                 </button>
-                <div class="device-badge" id="device-badge">
-                    <span class="badge-dot"></span>
-                    <span id="device-status">检测中...</span>
+                <div class="device-badges">
+                    <div class="device-badge" id="device-b-badge">
+                        <span class="badge-dot"></span>
+                        <span id="device-b-status" data-i18n="deviceBChecking">设备 B 检测中...</span>
+                    </div>
+                    <div class="device-badge" id="device-c-badge">
+                        <span class="badge-dot"></span>
+                        <span id="device-c-status" data-i18n="deviceCChecking">设备 C 检测中...</span>
+                    </div>
                 </div>
             </div>
         </header>
@@ -176,8 +182,12 @@
                         <span class="overview-value" id="backend-status">连接中...</span>
                     </div>
                     <div class="overview-item">
-                        <span class="overview-label" data-i18n="deviceState">设备状态</span>
-                        <span class="overview-value" id="overview-device-status">检测中...</span>
+                        <span class="overview-label" data-i18n="deviceB">设备 B</span>
+                        <span class="overview-value" id="overview-device-b-status">检测中...</span>
+                    </div>
+                    <div class="overview-item">
+                        <span class="overview-label" data-i18n="deviceC">设备 C</span>
+                        <span class="overview-value" id="overview-device-c-status">检测中...</span>
                     </div>
                     <div class="overview-item">
                         <span class="overview-label" data-i18n="lastUpdate">最近更新</span>
@@ -292,6 +302,6 @@
         </div>
     </div>
 
-    <script src="app.js?v=20260607-i18n"></script>
+    <script src="app.js?v=20260607-device-bc-noise"></script>
 </body>
 </html>
