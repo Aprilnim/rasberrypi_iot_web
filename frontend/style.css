@@ -365,22 +365,24 @@ body {
 }
 
 .metric-data {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(3.8ch, auto) auto;
     justify-content: center;
     align-items: baseline;
-    gap: 6px;
+    column-gap: 6px;
     margin-bottom: 6px;
 }
 
 .metric-value {
     display: inline-block;
-    min-width: 4ch;
-    text-align: right;
+    min-width: 3.8ch;
+    text-align: center;
     font-size: 52px;
     font-weight: 700;
     color: var(--accent);
     line-height: 1;
     font-variant-numeric: tabular-nums;
+    will-change: text-shadow, color;
 }
 
 body.sensor-live .metric-value {
@@ -389,10 +391,14 @@ body.sensor-live .metric-value {
 
 @keyframes sensorValueBreath {
     0%, 100% {
+        color: var(--accent);
         text-shadow: 0 0 0 rgba(56, 189, 248, 0);
     }
     50% {
-        text-shadow: 0 0 16px var(--accent-glow);
+        color: var(--accent-strong);
+        text-shadow:
+            0 0 12px var(--accent-glow),
+            0 0 28px var(--accent-glow-soft);
     }
 }
 
