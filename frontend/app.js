@@ -23,6 +23,7 @@
 // 这样代码更短、运行更快
 // ------------------------------------------------------------
 const els = {
+    sensorCard: document.getElementById("sensor-card"), // 传感器数据卡片
     temp: document.getElementById("temp"),           // 温度数值显示区域
     humidity: document.getElementById("humidity"),   // 湿度数值显示区域
     light: document.getElementById("light"),         // 光照数值显示区域
@@ -590,6 +591,19 @@ function formatMetric(value) {
     return Number.isInteger(number) ? String(number) : number.toFixed(1);
 }
 
+function pulseRealtimeIndicator() {
+    if (els.sensorCard) {
+        els.sensorCard.classList.remove("realtime-tick");
+        void els.sensorCard.offsetWidth;
+        els.sensorCard.classList.add("realtime-tick");
+    }
+    if (els.deviceBadge) {
+        els.deviceBadge.classList.remove("status-tick");
+        void els.deviceBadge.offsetWidth;
+        els.deviceBadge.classList.add("status-tick");
+    }
+}
+
 // ------------------------------------------------------------
 // addLog(message, type)
 // 往页面底部的操作日志区域追加一条日志
@@ -921,6 +935,7 @@ function applySensorData(data) {
     els.temp.innerText = formatMetric(data.temperature);
     els.humidity.innerText = formatMetric(data.humidity);
     els.light.innerText = formatMetric(data.light_percent);
+    pulseRealtimeIndicator();
     setBackendOnline(true);
     if (els.lastUpdateTime) {
         els.lastUpdateTime.innerText = formatTime(new Date());
@@ -1347,7 +1362,7 @@ renderAuditLoggedOut();
 addLog(t("systemReady"), "info");
 connectStateEvents();
 updateSensor();
-setInterval(updateSensor, 10000);
+setInterval(updateSensor, 5000);
 updateDeviceStates();
 setInterval(updateDeviceStates, 1000);
 updateLoraStatus();
