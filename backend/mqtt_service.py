@@ -18,6 +18,7 @@ HEARTBEAT_GRACE_MS = {
     "pi_c": 8000,
     "gateway": 8000,
 }
+WATCHDOG_INTERVAL_SECONDS = 2.0
 
 
 class MQTTService:
@@ -41,6 +42,7 @@ class MQTTService:
         self._pending_commands = {}
         self._sse_lock = threading.Lock()
         self._sse_clients = set()
+        self._last_online_snapshot = None
         self._cache = {
             "yl40": {
                 "light_percent": None,
@@ -92,6 +94,8 @@ class MQTTService:
             print(f"[MQTT] Backend connecting to {self.host}:{self.port}")
         except Exception as exc:
             print(f"[MQTT] Backend initialization failed: {exc}")
+
+        threading.Thread(target=self._availability_watchdog_loop, daemon=True).start()
 
     @staticmethod
     def _now_ms() -> int:
@@ -360,6 +364,42 @@ class MQTTService:
             "broker_online": self._connected,
             "message": "设备在线" if online else "设备连接失败",
         }
+
+    def _get_online_snapshot_locked(self):
+        return {
+            "pi_b": self._node_online_locked("pi_b"),
+            "pi_c": self._node_online_locked("pi_c"),
+            "gateway": self._node_online_locked("gateway"),
+            "broker": self._connected,
+        }
+
+    def _availability_watchdog_loop(self):
+        while True:
+            time.sleep(WATCHDOG_INTERVAL_SECONDS)
+            events = []
+            with self._lock:
+                snapshot = self._get_online_snapshot_locked()
+                if self._last_online_snapshot is None:
+                    self._last_online_snapshot = snapshot
+                    continue
+
+                previous = self._last_online_snapshot
+                if snapshot == previous:
+                    continue
+
+                self._last_online_snapshot = snapshot
+                if snapshot["pi_c"] != previous["pi_c"]:
+                    events.append(("sensor", self._get_sensor_snapshot_locked()))
+                if (
+                    snapshot["pi_b"] != previous["pi_b"]
+                    or snapshot["gateway"] != previous["gateway"]
+                    or snapshot["broker"] != previous["broker"]
+                ):
+                    events.append(("lora", self._get_lora_status_locked()))
+                    events.append(("device", self._get_device_states_snapshot_locked()))
+
+            for event, event_data in events:
+                self.broadcast_sse_event(event, event_data)
 
     def get_sensor_snapshot(self):
         with self._lock:

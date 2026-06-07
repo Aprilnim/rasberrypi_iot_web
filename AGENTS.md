@@ -8,16 +8,17 @@ It contains:
 
 - `backend/`：FastAPI backend (Python 3.11)
   - In MQTT mode reads SHT35/YL40 values from MQTT caches, not local hardware
-  - Sends LoRa commands to remote Raspberry Pi B for GPIO18 LED control and GPIO24 fan relay control
+  - In MQTT mode publishes control commands to MQTT and reads LoRa results/state back through `lora-gateway`
   - Maintains in-process caches for sensor data and remote LED/FAN state
-  - Tracks LoRa receiver availability with a background PING/PONG heartbeat
-  - Protects every LoRa serial read/write with one shared serial lock
+  - Exposes `GET /events` SSE for sensor/device/lora snapshots
+  - Tracks Pi B / Pi C / gateway availability from MQTT heartbeat/telemetry plus a watchdog
   - Requires login token auth for hardware write APIs
   - API: `GET /sensor`, `GET /temp`, `GET /light`, `GET /led`, `POST /led`, `GET /fan`, `POST /fan`, `GET /lora/status`, `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`
   - `lora.py`: LoRaNode class (serial comm, CRC16 + HMAC/sequence secure messages, ACK retry logic, LED/FAN commands, heartbeat ping, device state query)
 - `frontend/`：Static HTML/CSS/JS IoT Dashboard
   - Dark tech theme with glassmorphism cards
-  - Displays real-time sensor readings, LED switch, fan switch, LoRa status, and operation logs
+  - Displays real-time sensor readings, LED switch, fan switch, Device B/C status, LoRa status, and operation logs
+  - Uses SSE first and HTTP polling as fallback
   - Shows a login modal only when hardware control permission is needed
   - Uses `HttpOnly + Secure + SameSite=Lax` cookie auth for control permission
   - Shows auth Toast feedback on login/logout
@@ -47,6 +48,7 @@ Target device:
 - In `mqtt` mode `lora-gateway` is the only Pi A process allowed to open `/dev/ttyS0`.
 - Raspberry Pi B never connects to MQTT; `pi_b_node.py` receives commands and answers heartbeat/state only through LoRa.
 - Raspberry Pi C publishes SHT35 and YL40 telemetry to MQTT.
+- In `mqtt` mode Pi C online state is derived from heartbeat or recent telemetry; do not assume heartbeat is the only liveness signal.
 - MQTT topics use the `yl40iot/v1/` prefix.
 - MQTT control commands must never be retained.
 - Do not automatically fall back from MQTT control to direct LoRa control.
@@ -95,10 +97,13 @@ Before editing code:
 
 - `GET /sensor`, `GET /temp`, and `GET /light` must read sensor cache only.
 - `GET /led`, `GET /fan`, and `GET /lora/status` must read cached state/status only.
+- `GET /events` must stream cache snapshots only; it must not read hardware directly.
 - User-triggered GET requests must not directly access GPIO, I2C, `ser.write()`, or `ser.readline()`.
 - A background thread may read PCF8591 sensor data every 1 second and update `sensor_cache`.
 - A background thread may query Raspberry Pi B every 1 second with LoRa `QUERY,STATE` and update LED/FAN state cache.
 - In MQTT mode, SHT35/YL40 data comes from Pi C MQTT telemetry and Pi B must not send YL40 telemetry over LoRa.
+- In MQTT mode, Pi C telemetry should refresh Pi C online state even if heartbeat is delayed.
+- In MQTT mode, availability watchdog logic may broadcast SSE offline transitions without waiting for new MQTT packets.
 - `POST /led` and `POST /fan` are the hardware write APIs. They require auth, use the shared serial lock, send LoRa commands, wait for ACK, then update cache.
 - If polling fails, keep serving the last known cached value with error/stale metadata instead of crashing the API.
 
