@@ -51,6 +51,8 @@ const els = {
     themeToggle: document.getElementById("theme-toggle"), // 深色/浅色主题切换按钮
     themeIcon: document.getElementById("theme-icon"), // 主题按钮图标
     themeLabel: document.getElementById("theme-label"), // 主题按钮文字
+    langToggle: document.getElementById("lang-toggle"), // 中英文切换按钮
+    langLabel: document.getElementById("lang-label"), // 中英文切换按钮文字
     loginButton: document.getElementById("login-button"), // 登录按钮
     loginLabel: document.getElementById("login-label"), // 登录按钮文字
     loginModal: document.getElementById("login-modal"), // 登录弹窗
@@ -81,9 +83,229 @@ let loraPolling = false;
 let deviceStatesPolling = false;
 let loraOfflineStreak = 0;
 let stateEvents = null;
+let lastBackendOnline = null;
+let lastLoraOnline = null;
+let lastLedOn = null;
+let lastFanOn = null;
 const CONTROL_MIN_PENDING_MS = 800;
 const CONTROL_SUCCESS_SYNC_DELAY_MS = 1000;
 const CONTROL_FAILURE_CONFIRM_DELAY_MS = 1000;
+let currentLang = localStorage.getItem("lang") === "en" ? "en" : "zh";
+
+const i18n = {
+    zh: {
+        pageTitle: "YL40 监控台",
+        appTitle: "YL-40 传感器监控台",
+        subtitle: "物联网实时数据面板",
+        login: "登录",
+        logout: "登出",
+        lightTheme: "浅色",
+        darkTheme: "深色",
+        switchLightMode: "切换浅色模式",
+        switchDarkMode: "切换深色模式",
+        switchToEnglish: "切换英文",
+        switchToChinese: "切换中文",
+        checking: "检测中...",
+        sensorData: "传感器数据",
+        sht35Temp: "SHT35 温度",
+        sht35Humidity: "SHT35 湿度",
+        yl40Light: "YL40 光照",
+        ledControl: "LED 控制",
+        fanControl: "风扇控制",
+        lastAction: "最近操作",
+        systemInfo: "系统信息",
+        deviceModel: "设备型号",
+        sensors: "传感器",
+        controller: "主控",
+        firmware: "固件版本",
+        commStatus: "通信状态",
+        loraConnection: "LoRa 连接",
+        heartbeatInterval: "心跳间隔",
+        threeSeconds: "3 秒 / 次",
+        dataRefresh: "数据刷新",
+        oneSecond: "1 秒 / 次",
+        protocol: "通信协议",
+        deviceOverview: "设备概览",
+        backendService: "后端服务",
+        deviceState: "设备状态",
+        lastUpdate: "最近更新",
+        systemUptime: "系统运行",
+        operationLog: "操作日志",
+        clear: "清空",
+        auditRecords: "审计记录",
+        refresh: "刷新",
+        time: "时间",
+        user: "用户",
+        device: "设备",
+        action: "动作",
+        result: "结果",
+        sourceIp: "来源 IP",
+        error: "错误",
+        auditLoginHint: "登录后查看控制审计记录",
+        hardwareControlAuth: "硬件控制权限",
+        loginVisualCopy: "登录后才能写入 LoRa 控制链路，传感器与设备状态仍保持实时可见。",
+        loginControlAuth: "登录控制权限",
+        closeLoginModal: "关闭登录弹窗",
+        username: "用户名",
+        password: "密码",
+        registerHelp: "注册请联系管理员",
+        loginLoading: "登录中...",
+        loginFailed: "登录失败",
+        loginNetworkError: "登录失败：网络错误",
+        authLoggedInTitle: "控制权限已登录",
+        authLoggedInMessage: "现在可以控制 LED 与风扇",
+        authLoginLog: "控制权限登录成功",
+        authLoggedOutTitle: "控制权限已退出",
+        authLoggedOutMessage: "LED 与风扇状态保持不变",
+        authLogoutLog: "控制权限已退出",
+        ledLoginRequired: "LED 控制需要先登录",
+        fanLoginRequired: "风扇控制需要先登录",
+        ledReloginRequired: "LED 控制需要重新登录",
+        fanReloginRequired: "风扇控制需要重新登录",
+        ledTooFrequent: "LED 操作过于频繁，请稍后再试",
+        fanTooFrequent: "风扇操作过于频繁，请稍后再试",
+        ledOn: "LED 已开启",
+        ledOff: "LED 已关闭",
+        fanOn: "风扇已开启",
+        fanOff: "风扇已关闭",
+        ledConfirmedOn: "LED 已开启（状态确认）",
+        ledConfirmedOff: "LED 已关闭（状态确认）",
+        fanConfirmedOn: "风扇已开启（状态确认）",
+        fanConfirmedOff: "风扇已关闭（状态确认）",
+        ledFailed: "LED 控制失败：{message}",
+        fanFailed: "风扇控制失败：{message}",
+        hardwareUnavailable: "硬件不可用",
+        networkError: "网络错误",
+        online: "设备在线",
+        offline: "设备离线",
+        backendOk: "正常",
+        backendDown: "断开",
+        on: "开启",
+        off: "关闭",
+        unavailable: "不可用",
+        turningOn: "开启中",
+        turningOff: "关闭中",
+        confirming: "确认中",
+        logCleared: "日志已清空",
+        systemReady: "系统初始化完成，开始连接设备...",
+        sseUnsupported: "当前浏览器不支持实时状态推送，使用轮询模式",
+        auditEmpty: "暂无控制审计记录",
+        auditRecent: "最近 {count} 条控制记录",
+        auditAdminOnly: "仅管理员可查看审计记录",
+        auditReadFailed: "审计记录读取失败",
+        auditNetworkFailed: "审计记录读取失败：网络错误",
+    },
+    en: {
+        pageTitle: "YL40 Console",
+        appTitle: "YL-40 Sensor Console",
+        subtitle: "Real-time IoT data dashboard",
+        login: "Login",
+        logout: "Logout",
+        lightTheme: "Light",
+        darkTheme: "Dark",
+        switchLightMode: "Switch to light mode",
+        switchDarkMode: "Switch to dark mode",
+        switchToEnglish: "Switch to English",
+        switchToChinese: "Switch to Chinese",
+        checking: "Checking...",
+        sensorData: "Sensor Data",
+        sht35Temp: "SHT35 Temp",
+        sht35Humidity: "SHT35 Humidity",
+        yl40Light: "YL40 Light",
+        ledControl: "LED Control",
+        fanControl: "Fan Control",
+        lastAction: "Last action",
+        systemInfo: "System Info",
+        deviceModel: "Device Model",
+        sensors: "Sensors",
+        controller: "Controller",
+        firmware: "Firmware",
+        commStatus: "Comms Status",
+        loraConnection: "LoRa Link",
+        heartbeatInterval: "Heartbeat",
+        threeSeconds: "3 sec / tick",
+        dataRefresh: "Data Refresh",
+        oneSecond: "1 sec / tick",
+        protocol: "Protocol",
+        deviceOverview: "Device Overview",
+        backendService: "Backend",
+        deviceState: "Device State",
+        lastUpdate: "Last Update",
+        systemUptime: "Uptime",
+        operationLog: "Operation Log",
+        clear: "Clear",
+        auditRecords: "Audit Records",
+        refresh: "Refresh",
+        time: "Time",
+        user: "User",
+        device: "Device",
+        action: "Action",
+        result: "Result",
+        sourceIp: "Source IP",
+        error: "Error",
+        auditLoginHint: "Login to view control audit records",
+        hardwareControlAuth: "Hardware Control Access",
+        loginVisualCopy: "Login is required to write to the LoRa control chain. Sensor and device states remain visible in real time.",
+        loginControlAuth: "Login for Control",
+        closeLoginModal: "Close login dialog",
+        username: "Username",
+        password: "Password",
+        registerHelp: "Contact the administrator to register",
+        loginLoading: "Logging in...",
+        loginFailed: "Login failed",
+        loginNetworkError: "Login failed: network error",
+        authLoggedInTitle: "Control access granted",
+        authLoggedInMessage: "You can now control LED and fan",
+        authLoginLog: "Control access login succeeded",
+        authLoggedOutTitle: "Control access revoked",
+        authLoggedOutMessage: "LED and fan states remain unchanged",
+        authLogoutLog: "Control access logged out",
+        ledLoginRequired: "Login required before LED control",
+        fanLoginRequired: "Login required before fan control",
+        ledReloginRequired: "Please login again before LED control",
+        fanReloginRequired: "Please login again before fan control",
+        ledTooFrequent: "LED operation too frequent, please wait",
+        fanTooFrequent: "Fan operation too frequent, please wait",
+        ledOn: "LED turned on",
+        ledOff: "LED turned off",
+        fanOn: "Fan turned on",
+        fanOff: "Fan turned off",
+        ledConfirmedOn: "LED turned on (confirmed)",
+        ledConfirmedOff: "LED turned off (confirmed)",
+        fanConfirmedOn: "Fan turned on (confirmed)",
+        fanConfirmedOff: "Fan turned off (confirmed)",
+        ledFailed: "LED control failed: {message}",
+        fanFailed: "Fan control failed: {message}",
+        hardwareUnavailable: "Hardware unavailable",
+        networkError: "network error",
+        online: "Device online",
+        offline: "Device offline",
+        backendOk: "OK",
+        backendDown: "Down",
+        on: "On",
+        off: "Off",
+        unavailable: "Unavailable",
+        turningOn: "Turning on",
+        turningOff: "Turning off",
+        confirming: "Confirming",
+        logCleared: "Log cleared",
+        systemReady: "System initialized, connecting devices...",
+        sseUnsupported: "This browser does not support live state push; using polling mode",
+        auditEmpty: "No audit records",
+        auditRecent: "Recent {count} control records",
+        auditAdminOnly: "Only admins can view audit records",
+        auditReadFailed: "Failed to read audit records",
+        auditNetworkFailed: "Failed to read audit records: network error",
+    },
+};
+
+function t(key, params = {}) {
+    const template = i18n[currentLang][key] || i18n.zh[key] || key;
+    return Object.entries(params).reduce(
+        (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
+        template,
+    );
+}
 
 // ------------------------------------------------------------
 // 主题模式：手动优先 + 系统默认
@@ -107,10 +329,13 @@ function applyTheme(theme) {
     if (!els.themeToggle) return;
 
     const targetTheme = nextTheme === "light" ? "dark" : "light";
-    const targetText = targetTheme === "light" ? "浅色" : "深色";
+    const targetText = targetTheme === "light" ? t("lightTheme") : t("darkTheme");
     els.themeLabel.innerText = targetText;
     els.themeIcon.innerText = targetTheme === "light" ? "☀" : "☾";
-    els.themeToggle.setAttribute("aria-label", `切换${targetText}模式`);
+    els.themeToggle.setAttribute(
+        "aria-label",
+        targetTheme === "light" ? t("switchLightMode") : t("switchDarkMode"),
+    );
 }
 
 function toggleTheme() {
@@ -132,6 +357,51 @@ function setAuthState(authenticated, user = null) {
     };
     updateAuthButton();
     if (!authenticated) {
+        renderAuditLoggedOut();
+    }
+}
+
+function applyLanguage() {
+    document.documentElement.lang = currentLang === "en" ? "en" : "zh-CN";
+    document.title = t("pageTitle");
+    document.querySelectorAll("[data-i18n]").forEach((node) => {
+        node.innerText = t(node.dataset.i18n);
+    });
+    document.querySelectorAll("[data-i18n-aria]").forEach((node) => {
+        node.setAttribute("aria-label", t(node.dataset.i18nAria));
+    });
+    if (els.langLabel) {
+        els.langLabel.innerText = currentLang === "en" ? "中" : "EN";
+    }
+    if (els.langToggle) {
+        els.langToggle.setAttribute(
+            "aria-label",
+            currentLang === "en" ? t("switchToChinese") : t("switchToEnglish"),
+        );
+    }
+    applyTheme(document.body.dataset.theme || getPreferredTheme());
+    updateAuthButton();
+    if (lastBackendOnline !== null) {
+        setBackendOnline(lastBackendOnline);
+    }
+    if (lastLoraOnline !== null) {
+        setLoraOnline(lastLoraOnline);
+    }
+    if (lastLedOn !== null && !ledControlPending) {
+        updateLedVisual(lastLedOn);
+    }
+    if (lastFanOn !== null && !fanControlPending) {
+        updateFanVisual(lastFanOn);
+    }
+}
+
+function toggleLanguage() {
+    currentLang = currentLang === "en" ? "zh" : "en";
+    localStorage.setItem("lang", currentLang);
+    applyLanguage();
+    if (isAuthenticated()) {
+        updateAuditLogs();
+    } else {
         renderAuditLoggedOut();
     }
 }
@@ -170,13 +440,13 @@ async function keepMinimumPending(startedAt) {
 function updateAuthButton() {
     if (!els.loginButton || !els.loginLabel) return;
     if (isAuthenticated()) {
-        els.loginLabel.innerText = "登出";
+        els.loginLabel.innerText = t("logout");
         els.loginButton.classList.add("authed");
-        els.loginButton.setAttribute("aria-label", "退出控制权限");
+        els.loginButton.setAttribute("aria-label", t("logout"));
     } else {
-        els.loginLabel.innerText = "登录";
+        els.loginLabel.innerText = t("login");
         els.loginButton.classList.remove("authed");
-        els.loginButton.setAttribute("aria-label", "登录控制权限");
+        els.loginButton.setAttribute("aria-label", t("loginControlAuth"));
     }
 }
 
@@ -229,7 +499,7 @@ async function login(event) {
     event.preventDefault();
     clearLoginError();
     els.loginSubmit.disabled = true;
-    els.loginSubmit.innerText = "登录中...";
+    els.loginSubmit.innerText = t("loginLoading");
 
     try {
         const response = await fetch("/api/auth/login", {
@@ -243,21 +513,21 @@ async function login(event) {
         const data = await response.json();
 
         if (!response.ok) {
-            showLoginError(data.detail || "登录失败");
+            showLoginError(data.detail || t("loginFailed"));
             return;
         }
 
         setAuthState(true, data.user || null);
         closeLoginModal();
         flashAuthButton();
-        showAuthToast("控制权限已登录", "现在可以控制 LED 与风扇", "success");
-        addLog("控制权限登录成功", "info");
+        showAuthToast(t("authLoggedInTitle"), t("authLoggedInMessage"), "success");
+        addLog(t("authLoginLog"), "info");
         updateAuditLogs();
     } catch (err) {
-        showLoginError("登录失败：网络错误");
+        showLoginError(t("loginNetworkError"));
     } finally {
         els.loginSubmit.disabled = false;
-        els.loginSubmit.innerText = "登录";
+        els.loginSubmit.innerText = t("login");
     }
 }
 
@@ -278,8 +548,8 @@ async function logout() {
     // 登出只清理控制权限 Cookie，不改变 LED/FAN 的硬件状态。
     setAuthState(false);
     flashAuthButton();
-    showAuthToast("控制权限已退出", "LED 与风扇状态保持不变", "success");
-    addLog("控制权限已退出", "info");
+    showAuthToast(t("authLoggedOutTitle"), t("authLoggedOutMessage"), "success");
+    addLog(t("authLogoutLog"), "info");
 }
 
 async function syncAuthState() {
@@ -360,8 +630,8 @@ function renderAuditMessage(message) {
 }
 
 function renderAuditLoggedOut() {
-    setAuditHint("登录后查看控制审计记录");
-    renderAuditMessage("登录后查看控制审计记录");
+    setAuditHint(t("auditLoginHint"));
+    renderAuditMessage(t("auditLoginHint"));
 }
 
 function createAuditCell(text, className = "") {
@@ -385,12 +655,12 @@ function renderAuditLogs(logs) {
     els.auditLogList.innerHTML = "";
 
     if (!logs.length) {
-        setAuditHint("暂无控制审计记录");
-        renderAuditMessage("暂无控制审计记录");
+        setAuditHint(t("auditEmpty"));
+        renderAuditMessage(t("auditEmpty"));
         return;
     }
 
-    setAuditHint(`最近 ${logs.length} 条控制记录`);
+    setAuditHint(t("auditRecent", { count: logs.length }));
 
     logs.forEach((item) => {
         const row = document.createElement("tr");
@@ -430,17 +700,17 @@ async function updateAuditLogs() {
         }
         const data = await response.json();
         if (response.status === 403) {
-            setAuditHint("仅管理员可查看审计记录");
-            renderAuditMessage(data.detail || "仅管理员可查看审计记录");
+            setAuditHint(t("auditAdminOnly"));
+            renderAuditMessage(data.detail || t("auditAdminOnly"));
             return;
         }
         if (!response.ok) {
-            renderAuditMessage(data.detail || "审计记录读取失败");
+            renderAuditMessage(data.detail || t("auditReadFailed"));
             return;
         }
         renderAuditLogs(data.logs || []);
     } catch (err) {
-        renderAuditMessage("审计记录读取失败：网络错误");
+        renderAuditMessage(t("auditNetworkFailed"));
     }
 }
 
@@ -462,22 +732,22 @@ function updateLastTime(type) {
 
 function showLedPending(isOn) {
     updateLedVisual(isOn);
-    els.ledStatus.innerText = isOn ? "开启中" : "关闭中";
+    els.ledStatus.innerText = isOn ? t("turningOn") : t("turningOff");
 }
 
 function showFanPending(isOn) {
     updateFanVisual(isOn);
-    els.fanStatus.innerText = isOn ? "开启中" : "关闭中";
+    els.fanStatus.innerText = isOn ? t("turningOn") : t("turningOff");
 }
 
 function showLedConfirming(isOn) {
     updateLedVisual(isOn);
-    els.ledStatus.innerText = "确认中";
+    els.ledStatus.innerText = t("confirming");
 }
 
 function showFanConfirming(isOn) {
     updateFanVisual(isOn);
-    els.fanStatus.innerText = "确认中";
+    els.fanStatus.innerText = t("confirming");
 }
 
 function scheduleLedCacheSync() {
@@ -509,7 +779,7 @@ async function confirmLedStateAfterFailure(targetState, errorMessage) {
         if (data && data.on === targetState) {
             els.ledSwitch.checked = targetState;
             updateLedVisual(targetState);
-            addLog(`LED 已${targetState ? "开启" : "关闭"}（状态确认）`, "action");
+            addLog(targetState ? t("ledConfirmedOn") : t("ledConfirmedOff"), "action");
             updateLastTime("led");
             updateAuditLogs();
             scheduleLedCacheSync();
@@ -521,7 +791,7 @@ async function confirmLedStateAfterFailure(targetState, errorMessage) {
 
     els.ledSwitch.checked = !targetState;
     updateLedVisual(!targetState);
-    addLog(`LED 控制失败：${errorMessage}`, "error");
+    addLog(t("ledFailed", { message: errorMessage }), "error");
     updateAuditLogs();
     return false;
 }
@@ -536,7 +806,7 @@ async function confirmFanStateAfterFailure(targetState, errorMessage) {
         if (data && data.on === targetState) {
             els.fanSwitch.checked = targetState;
             updateFanVisual(targetState);
-            addLog(`风扇已${targetState ? "开启" : "关闭"}（状态确认）`, "action");
+            addLog(targetState ? t("fanConfirmedOn") : t("fanConfirmedOff"), "action");
             updateLastTime("fan");
             updateAuditLogs();
             scheduleFanCacheSync();
@@ -548,7 +818,7 @@ async function confirmFanStateAfterFailure(targetState, errorMessage) {
 
     els.fanSwitch.checked = !targetState;
     updateFanVisual(!targetState);
-    addLog(`风扇控制失败：${errorMessage}`, "error");
+    addLog(t("fanFailed", { message: errorMessage }), "error");
     updateAuditLogs();
     return false;
 }
@@ -589,11 +859,12 @@ async function updateUptimeFromBackend() {
 //       不反映树莓派 B 的 LoRa 是否在线
 // ------------------------------------------------------------
 function setBackendOnline(online) {
+    lastBackendOnline = Boolean(online);
     if (online) {
-        els.backendStatus.innerText = "正常";
+        els.backendStatus.innerText = t("backendOk");
         els.backendStatus.className = "overview-value status-ok";
     } else {
-        els.backendStatus.innerText = "断开";
+        els.backendStatus.innerText = t("backendDown");
         els.backendStatus.className = "overview-value status-err";
     }
 }
@@ -613,28 +884,29 @@ function setBackendOnline(online) {
 //   - LED 开关、风扇开关都禁用（防止离线时误操作）
 // ------------------------------------------------------------
 function setLoraOnline(online) {
+    lastLoraOnline = Boolean(online);
     if (online) {
-        els.loraStatus.innerText = "设备在线";
+        els.loraStatus.innerText = t("online");
         els.loraStatus.className = "info-val status-ok";
-        els.deviceStatus.innerText = "设备在线";
+        els.deviceStatus.innerText = t("online");
         els.deviceBadge.classList.add("online");
         els.deviceBadge.classList.remove("offline");
         els.ledSwitch.disabled = false;
         els.fanSwitch.disabled = false;
         if (els.overviewDeviceStatus) {
-            els.overviewDeviceStatus.innerText = "设备在线";
+            els.overviewDeviceStatus.innerText = t("online");
             els.overviewDeviceStatus.className = "overview-value status-ok";
         }
     } else {
-        els.loraStatus.innerText = "设备离线";
+        els.loraStatus.innerText = t("offline");
         els.loraStatus.className = "info-val status-err";
-        els.deviceStatus.innerText = "设备离线";
+        els.deviceStatus.innerText = t("offline");
         els.deviceBadge.classList.add("offline");
         els.deviceBadge.classList.remove("online");
         els.ledSwitch.disabled = true;
         els.fanSwitch.disabled = true;
         if (els.overviewDeviceStatus) {
-            els.overviewDeviceStatus.innerText = "设备离线";
+            els.overviewDeviceStatus.innerText = t("offline");
             els.overviewDeviceStatus.className = "overview-value status-err";
         }
     }
@@ -682,12 +954,13 @@ async function updateSensor() {
 // 注意：这个只是纯 UI 更新，不涉及网络请求
 // ------------------------------------------------------------
 function updateLedVisual(isOn) {
+    lastLedOn = Boolean(isOn);
     if (isOn) {
-        els.ledStatus.innerText = "开启";
+        els.ledStatus.innerText = t("on");
         els.ledBulb.classList.add("on");
         els.ledGlow.classList.add("on");
     } else {
-        els.ledStatus.innerText = "关闭";
+        els.ledStatus.innerText = t("off");
         els.ledBulb.classList.remove("on");
         els.ledGlow.classList.remove("on");
     }
@@ -697,7 +970,7 @@ function applyLedData(data) {
     if (ledControlPending || Date.now() < ledControlProtectUntil) return;
 
     if (!data.available) {
-        els.ledStatus.innerText = "不可用";
+        els.ledStatus.innerText = t("unavailable");
         return;
     }
     els.ledSwitch.checked = Boolean(data.on);
@@ -739,7 +1012,7 @@ async function toggleLed() {
     const newState = els.ledSwitch.checked;
     if (!isAuthenticated()) {
         els.ledSwitch.checked = !newState;
-        addLog("LED 控制需要先登录", "error");
+        addLog(t("ledLoginRequired"), "error");
         openLoginModal();
         return;
     }
@@ -761,12 +1034,12 @@ async function toggleLed() {
         const data = await response.json();
         if (response.status === 401 || response.status === 403) {
             setAuthState(false);
-            addLog(data.detail || "LED 控制需要重新登录", "error");
+            addLog(data.detail || t("ledReloginRequired"), "error");
             els.ledSwitch.checked = !newState;
             updateLedVisual(!newState);
             openLoginModal();
         } else if (response.status === 429) {
-            addLog(data.detail || "LED 操作过于频繁，请稍后再试", "error");
+            addLog(data.detail || t("ledTooFrequent"), "error");
             els.ledSwitch.checked = !newState;
             updateLedVisual(!newState);
         } else if (data.error) {
@@ -774,15 +1047,15 @@ async function toggleLed() {
         } else if (data.available) {
             els.ledSwitch.checked = data.on;
             updateLedVisual(data.on);
-            addLog(`LED 已${data.on ? "开启" : "关闭"}`, "action");
+            addLog(data.on ? t("ledOn") : t("ledOff"), "action");
             updateLastTime("led");
             updateAuditLogs();
             scheduleLedCacheSync();
         } else {
-            await confirmLedStateAfterFailure(newState, "硬件不可用");
+            await confirmLedStateAfterFailure(newState, t("hardwareUnavailable"));
         }
     } catch (err) {
-        await confirmLedStateAfterFailure(newState, "网络错误");
+        await confirmLedStateAfterFailure(newState, t("networkError"));
     } finally {
         await keepMinimumPending(startedAt);
         ledControlPending = false;
@@ -797,12 +1070,13 @@ async function toggleLed() {
 // 注意：这个只是纯 UI 更新，不涉及网络请求
 // ------------------------------------------------------------
 function updateFanVisual(isOn) {
+    lastFanOn = Boolean(isOn);
     if (isOn) {
-        els.fanStatus.innerText = "开启";
+        els.fanStatus.innerText = t("on");
         els.fanBulb.classList.add("on");
         els.fanGlow.classList.add("on");
     } else {
-        els.fanStatus.innerText = "关闭";
+        els.fanStatus.innerText = t("off");
         els.fanBulb.classList.remove("on");
         els.fanGlow.classList.remove("on");
     }
@@ -812,7 +1086,7 @@ function applyFanData(data) {
     if (fanControlPending || Date.now() < fanControlProtectUntil) return;
 
     if (!data.available) {
-        els.fanStatus.innerText = "不可用";
+        els.fanStatus.innerText = t("unavailable");
         return;
     }
     els.fanSwitch.checked = Boolean(data.on);
@@ -852,7 +1126,7 @@ async function toggleFan() {
     const newState = els.fanSwitch.checked;
     if (!isAuthenticated()) {
         els.fanSwitch.checked = !newState;
-        addLog("风扇控制需要先登录", "error");
+        addLog(t("fanLoginRequired"), "error");
         openLoginModal();
         return;
     }
@@ -874,12 +1148,12 @@ async function toggleFan() {
         const data = await response.json();
         if (response.status === 401 || response.status === 403) {
             setAuthState(false);
-            addLog(data.detail || "风扇控制需要重新登录", "error");
+            addLog(data.detail || t("fanReloginRequired"), "error");
             els.fanSwitch.checked = !newState;
             updateFanVisual(!newState);
             openLoginModal();
         } else if (response.status === 429) {
-            addLog(data.detail || "风扇操作过于频繁，请稍后再试", "error");
+            addLog(data.detail || t("fanTooFrequent"), "error");
             els.fanSwitch.checked = !newState;
             updateFanVisual(!newState);
         } else if (data.error) {
@@ -887,15 +1161,15 @@ async function toggleFan() {
         } else if (data.available) {
             els.fanSwitch.checked = data.on;
             updateFanVisual(data.on);
-            addLog(`风扇已${data.on ? "开启" : "关闭"}`, "action");
+            addLog(data.on ? t("fanOn") : t("fanOff"), "action");
             updateLastTime("fan");
             updateAuditLogs();
             scheduleFanCacheSync();
         } else {
-            await confirmFanStateAfterFailure(newState, "硬件不可用");
+            await confirmFanStateAfterFailure(newState, t("hardwareUnavailable"));
         }
     } catch (err) {
-        await confirmFanStateAfterFailure(newState, "网络错误");
+        await confirmFanStateAfterFailure(newState, t("networkError"));
     } finally {
         await keepMinimumPending(startedAt);
         fanControlPending = false;
@@ -975,7 +1249,7 @@ async function updateLoraStatus() {
 
 function connectStateEvents() {
     if (!window.EventSource) {
-        addLog("当前浏览器不支持实时状态推送，使用轮询模式", "info");
+        addLog(t("sseUnsupported"), "info");
         return;
     }
 
@@ -1027,6 +1301,7 @@ function connectStateEvents() {
 els.ledSwitch.addEventListener("change", toggleLed);
 els.fanSwitch.addEventListener("change", toggleFan);
 els.themeToggle.addEventListener("click", toggleTheme);
+els.langToggle.addEventListener("click", toggleLanguage);
 els.loginButton.addEventListener("click", () => {
     if (isAuthenticated()) {
         logout();
@@ -1048,7 +1323,7 @@ document.addEventListener("keydown", (event) => {
 });
 els.clearLog.addEventListener("click", () => {
     els.logList.innerHTML = "";
-    addLog("日志已清空", "info");
+    addLog(t("logCleared"), "info");
 });
 els.auditRefresh.addEventListener("click", updateAuditLogs);
 themeQuery.addEventListener("change", syncSystemTheme);
@@ -1066,12 +1341,13 @@ themeQuery.addEventListener("change", syncSystemTheme);
 // 8. 启动定时器，每秒刷新系统运行时长
 // ------------------------------------------------------------
 applyTheme(getPreferredTheme());
+applyLanguage();
 syncAuthState();
 renderAuditLoggedOut();
-addLog("系统初始化完成，开始连接设备...", "info");
+addLog(t("systemReady"), "info");
 connectStateEvents();
 updateSensor();
-setInterval(updateSensor, 5000);
+setInterval(updateSensor, 10000);
 updateDeviceStates();
 setInterval(updateDeviceStates, 1000);
 updateLoraStatus();
