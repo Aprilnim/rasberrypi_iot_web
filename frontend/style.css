@@ -268,25 +268,6 @@ body {
     box-shadow: 0 0 10px currentColor;
 }
 
-.device-badge.status-tick .badge-dot {
-    animation: statusTick 520ms ease-out;
-}
-
-@keyframes statusTick {
-    0% {
-        transform: scale(1);
-        box-shadow: 0 0 10px currentColor;
-    }
-    42% {
-        transform: scale(1.45);
-        box-shadow: 0 0 18px currentColor;
-    }
-    100% {
-        transform: scale(1);
-        box-shadow: 0 0 10px currentColor;
-    }
-}
-
 /* ========== Grid Layout ========== */
 .dashboard-grid {
     display: grid;
@@ -323,25 +304,6 @@ body {
     border-color: var(--accent-hover-border);
     box-shadow: var(--shadow-card-hover);
     transform: translateY(-2px);
-}
-
-.card.realtime-tick {
-    animation: cardRealtimeTick 620ms ease-out;
-}
-
-@keyframes cardRealtimeTick {
-    0% {
-        border-color: var(--border-soft);
-        box-shadow: var(--shadow-card);
-    }
-    36% {
-        border-color: var(--accent-border);
-        box-shadow: 0 0 0 1px var(--accent-soft), var(--shadow-card);
-    }
-    100% {
-        border-color: var(--border-soft);
-        box-shadow: var(--shadow-card);
-    }
 }
 
 .card-header {
