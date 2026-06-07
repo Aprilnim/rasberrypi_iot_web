@@ -81,8 +81,8 @@ let loraPolling = false;
 let deviceStatesPolling = false;
 let loraOfflineStreak = 0;
 let stateEvents = null;
-const CONTROL_MIN_PENDING_MS = 1500;
-const CONTROL_SUCCESS_SYNC_DELAY_MS = 3000;
+const CONTROL_MIN_PENDING_MS = 800;
+const CONTROL_SUCCESS_SYNC_DELAY_MS = 1000;
 const CONTROL_FAILURE_CONFIRM_DELAY_MS = 1000;
 
 // ------------------------------------------------------------

@@ -34,6 +34,8 @@ MQTT_CLIENT_ID = os.environ.get("MQTT_GATEWAY_CLIENT_ID", "lora-a")
 START_TIME = time.time()
 CONTROL_ACK_RETRIES = 3
 CONTROL_ACK_TIMEOUT = 1.5
+HEARTBEAT_INTERVAL = float(os.environ.get("LORA_GATEWAY_HEARTBEAT_INTERVAL", "3.0"))
+COMMAND_QUIET_SECONDS = float(os.environ.get("LORA_COMMAND_QUIET_SECONDS", "2.0"))
 PI_B_OFFLINE_GRACE = 12.0
 STATE_QUERY_INTERVAL = 10.0
 LOCK_BUSY = object()
@@ -55,6 +57,7 @@ class LoRaMQTTGateway:
         self._command_lock = threading.Lock()
         self._pending_command_lock = threading.Lock()
         self._pending_command_count = 0
+        self._command_quiet_until = 0.0
         self._stop_event = threading.Event()
         self._last_b_message_at = None
         # None 强制首次探测结果写入 retained availability，清除 Broker 中可能残留的旧状态。
@@ -205,10 +208,11 @@ class LoRaMQTTGateway:
     def _mark_command_done(self):
         with self._pending_command_lock:
             self._pending_command_count = max(0, self._pending_command_count - 1)
+            self._command_quiet_until = time.time() + COMMAND_QUIET_SECONDS
 
     def _has_pending_command(self):
         with self._pending_command_lock:
-            return self._pending_command_count > 0
+            return self._pending_command_count > 0 or time.time() < self._command_quiet_until
 
     def _process_command_message_locked(self, message):
         device = message.topic.split("/")[-2]
@@ -486,7 +490,7 @@ class LoRaMQTTGateway:
                 return
 
     def _heartbeat_loop(self):
-        while not self._stop_event.wait(2):
+        while not self._stop_event.wait(HEARTBEAT_INTERVAL):
             self.mqtt.publish(
                 f"{GATEWAY_PREFIX}/heartbeat",
                 self._json(

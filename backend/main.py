@@ -1280,6 +1280,12 @@ def encode_sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {payload}\n\n"
 
 
+def encode_sse_flush_hint() -> str:
+    # Cloudflare Tunnel 对很小的首个 chunk 偶尔不会立刻刷出；
+    # SSE comment 会被浏览器忽略，64KB padding 用来穿过更激进的代理缓冲。
+    return f": connected {' ' * 65536}\n\n"
+
+
 # ------------------------------------------------------------
 # GET /events
 # SSE 单向状态推送接口。它只推送原本已公开的传感器、设备和 LoRa 状态，
@@ -1297,6 +1303,9 @@ def state_events():
 
         def mqtt_event_stream():
             try:
+                yield encode_sse_flush_hint()
+                # 再发一个普通事件，方便 curl/调试确认 SSE 流已建立。
+                yield encode_sse_event("ping", {"ts": int(time.time())})
                 while True:
                     try:
                         item = client_queue.get(timeout=15)
@@ -1309,6 +1318,7 @@ def state_events():
         return StreamingResponse(mqtt_event_stream(), media_type="text/event-stream", headers=headers)
 
     def legacy_event_stream():
+        yield encode_sse_flush_hint()
         while True:
             yield encode_sse_event("sensor", get_sensor_cache_snapshot())
             yield encode_sse_event("device", {"led": get_led(), "fan": get_fan()})

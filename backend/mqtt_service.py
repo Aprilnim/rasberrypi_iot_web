@@ -218,13 +218,24 @@ class MQTTService:
             elif message.topic.endswith("/heartbeat"):
                 self._update_heartbeat(message.topic, now)
                 events.append(("lora", self._get_lora_status_locked()))
-                events.append(("device", self._get_device_states_snapshot_locked()))
             elif message.topic.endswith("/result"):
                 cmd_id = data.get("cmd_id")
                 pending = self._pending_commands.get(cmd_id)
+                target = data.get("target")
+                actual_state = data.get("actual_state")
+                if data.get("result") == "success" and target in ("led", "fan") and actual_state in ("on", "off"):
+                    self._cache[target].update(
+                        {
+                            "on": actual_state == "on",
+                            "updated_at": now,
+                            "last_cmd_id": cmd_id,
+                            "error": None,
+                        }
+                    )
+                    events.append(("device", self._get_device_states_snapshot_locked()))
                 if (
                     pending
-                    and data.get("target") == pending["device"]
+                    and target == pending["device"]
                     and data.get("requested_state") == pending["state"]
                     and data.get("result") in ("success", "failed", "rejected")
                 ):
