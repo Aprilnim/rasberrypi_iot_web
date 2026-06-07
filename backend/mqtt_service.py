@@ -174,6 +174,7 @@ class MQTTService:
         events = []
         with self._lock:
             if message.topic == f"{PI_C_PREFIX}/telemetry/yl40":
+                self._mark_node_seen("pi_c", now)
                 self._cache["yl40"].update(
                     {
                         "light_percent": data.get("light_percent"),
@@ -184,6 +185,7 @@ class MQTTService:
                 )
                 events.append(("sensor", self._get_sensor_snapshot_locked()))
             elif message.topic == f"{PI_C_PREFIX}/telemetry/sht35":
+                self._mark_node_seen("pi_c", now)
                 self._cache["sht35"].update(
                     {
                         "temperature": data.get("temperature"),
@@ -264,6 +266,9 @@ class MQTTService:
         else:
             return
         self._cache[key].update({"online": online, "updated_at": now})
+
+    def _mark_node_seen(self, key, now):
+        self._cache[key].update({"online": True, "updated_at": now, "heartbeat_at": now})
 
     def _update_heartbeat(self, topic, now):
         if topic == f"{PI_B_PREFIX}/heartbeat":
