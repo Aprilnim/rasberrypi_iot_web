@@ -553,6 +553,7 @@ body.sensor-live .metric-value {
     display: inline-block;
     width: 56px;
     height: 30px;
+    border-radius: 30px;
 }
 
 .switch input {
@@ -569,7 +570,10 @@ body.sensor-live .metric-value {
     right: 0;
     bottom: 0;
     background-color: var(--control-bg);
-    transition: .3s;
+    transition:
+        background-color 0.24s ease,
+        border-color 0.24s ease,
+        box-shadow 0.24s ease;
     border-radius: 30px;
     border: 1px solid var(--border-mid);
 }
@@ -582,9 +586,13 @@ body.sensor-live .metric-value {
     left: 3px;
     bottom: 3px;
     background-color: var(--text-soft);
-    transition: .3s;
+    transition:
+        transform 0.28s cubic-bezier(0.22, 1, 0.36, 1),
+        background-color 0.2s ease,
+        box-shadow 0.2s ease;
     border-radius: 50%;
     box-shadow: 0 2px 4px var(--knob-shadow);
+    will-change: transform;
 }
 
 input:checked + .slider {
@@ -598,9 +606,26 @@ input:checked + .slider:before {
     box-shadow: 0 0 12px var(--accent-strong);
 }
 
+.switch.synced .slider {
+    animation: switchSyncedPulse 0.45s ease-out;
+}
+
+@keyframes switchSyncedPulse {
+    0% {
+        box-shadow: 0 0 0 0 var(--accent-glow-soft);
+    }
+    45% {
+        box-shadow: 0 0 0 7px var(--accent-glow-soft), 0 0 18px var(--accent-glow);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(56, 189, 248, 0);
+    }
+}
+
 input:disabled + .slider {
     background-color: var(--panel-bg-soft);
     cursor: not-allowed;
+    box-shadow: none;
 }
 
 input:disabled + .slider:before {

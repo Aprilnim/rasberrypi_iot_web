@@ -92,6 +92,8 @@ let lastPiCOnline = null;
 let lastLedOn = null;
 let lastFanOn = null;
 let displayedLight = null;
+let ledSyncPulseTimer = null;
+let fanSyncPulseTimer = null;
 const CONTROL_MIN_PENDING_MS = 800;
 const CONTROL_SUCCESS_SYNC_DELAY_MS = 1000;
 const CONTROL_FAILURE_CONFIRM_DELAY_MS = 1000;
@@ -1021,6 +1023,25 @@ function updateLedVisual(isOn) {
     }
 }
 
+function pulseSyncedSwitch(type) {
+    const switchEl = type === "led" ? els.ledSwitch : els.fanSwitch;
+    const timerName = type === "led" ? "ledSyncPulseTimer" : "fanSyncPulseTimer";
+    const wrapper = switchEl && switchEl.closest(".switch");
+    if (!wrapper) return;
+
+    window.clearTimeout(type === "led" ? ledSyncPulseTimer : fanSyncPulseTimer);
+    wrapper.classList.remove("synced");
+    void wrapper.offsetWidth;
+    wrapper.classList.add("synced");
+
+    const timer = window.setTimeout(() => wrapper.classList.remove("synced"), 450);
+    if (timerName === "ledSyncPulseTimer") {
+        ledSyncPulseTimer = timer;
+    } else {
+        fanSyncPulseTimer = timer;
+    }
+}
+
 function applyLedData(data) {
     if (ledControlPending || Date.now() < ledControlProtectUntil) return;
 
@@ -1028,8 +1049,21 @@ function applyLedData(data) {
         els.ledStatus.innerText = t("unavailable");
         return;
     }
-    els.ledSwitch.checked = Boolean(data.on);
-    updateLedVisual(Boolean(data.on));
+
+    const nextOn = Boolean(data.on);
+    const changed = lastLedOn !== null && lastLedOn !== nextOn;
+    const expectedStatus = nextOn ? t("on") : t("off");
+    if (!changed && els.ledSwitch.checked === nextOn && els.ledStatus.innerText === expectedStatus) {
+        return;
+    }
+
+    if (els.ledSwitch.checked !== nextOn) {
+        els.ledSwitch.checked = nextOn;
+    }
+    updateLedVisual(nextOn);
+    if (changed) {
+        pulseSyncedSwitch("led");
+    }
 }
 
 // ------------------------------------------------------------
@@ -1144,8 +1178,21 @@ function applyFanData(data) {
         els.fanStatus.innerText = t("unavailable");
         return;
     }
-    els.fanSwitch.checked = Boolean(data.on);
-    updateFanVisual(Boolean(data.on));
+
+    const nextOn = Boolean(data.on);
+    const changed = lastFanOn !== null && lastFanOn !== nextOn;
+    const expectedStatus = nextOn ? t("on") : t("off");
+    if (!changed && els.fanSwitch.checked === nextOn && els.fanStatus.innerText === expectedStatus) {
+        return;
+    }
+
+    if (els.fanSwitch.checked !== nextOn) {
+        els.fanSwitch.checked = nextOn;
+    }
+    updateFanVisual(nextOn);
+    if (changed) {
+        pulseSyncedSwitch("fan");
+    }
 }
 
 // ------------------------------------------------------------
