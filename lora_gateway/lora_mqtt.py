@@ -32,8 +32,9 @@ MQTT_USERNAME = os.environ.get("MQTT_GATEWAY_USERNAME", "lora-gateway")
 MQTT_PASSWORD = os.environ.get("MQTT_GATEWAY_PASSWORD", "")
 MQTT_CLIENT_ID = os.environ.get("MQTT_GATEWAY_CLIENT_ID", "lora-a")
 START_TIME = time.time()
-CONTROL_ACK_RETRIES = 3
-CONTROL_ACK_TIMEOUT = 1.5
+CONTROL_ACK_RETRIES = int(os.environ.get("LORA_CONTROL_ACK_RETRIES", "5"))
+CONTROL_ACK_TIMEOUT = float(os.environ.get("LORA_CONTROL_ACK_TIMEOUT", "1.8"))
+CONTROL_SECOND_CHANCE_DELAY = float(os.environ.get("LORA_CONTROL_SECOND_CHANCE_DELAY", "0.15"))
 HEARTBEAT_INTERVAL = float(os.environ.get("LORA_GATEWAY_HEARTBEAT_INTERVAL", "3.0"))
 COMMAND_QUIET_SECONDS = float(os.environ.get("LORA_COMMAND_QUIET_SECONDS", "2.0"))
 PI_B_OFFLINE_GRACE = 12.0
@@ -262,20 +263,25 @@ class LoRaMQTTGateway:
             self._remember_and_publish(device, result)
             return
 
-        action = requested_state.upper()
-        expected = f"ACK,{device.upper()},{action},{cmd_id}"
-        response = self._transact(
-            f"CMD,{device.upper()},{action},{cmd_id}",
-            expected,
-            retries=CONTROL_ACK_RETRIES,
-            timeout=CONTROL_ACK_TIMEOUT,
-        )
+        response = self._send_control_command(device, requested_state, cmd_id)
         if response:
             result = self._make_result(cmd_id, device, requested_state, "success", requested_state, None)
             self._publish_state(device, requested_state, cmd_id)
             self._publish_pi_b_heartbeat()
         else:
             actual_state = self._confirm_state_after_ack_timeout(device, requested_state)
+            if actual_state != requested_state:
+                print(
+                    f"[LoRa] Retrying control after state mismatch: {device} requested={requested_state} actual={actual_state}",
+                    flush=True,
+                )
+                time.sleep(CONTROL_SECOND_CHANCE_DELAY)
+                response = self._send_control_command(device, requested_state, cmd_id)
+                if response:
+                    actual_state = requested_state
+                else:
+                    actual_state = self._confirm_state_after_ack_timeout(device, requested_state)
+
             if actual_state == requested_state:
                 result = self._make_result(cmd_id, device, requested_state, "success", actual_state, None)
                 self._publish_state(device, actual_state, cmd_id)
@@ -290,6 +296,16 @@ class LoRaMQTTGateway:
                     "LoRa ACK timeout",
                 )
         self._remember_and_publish(device, result)
+
+    def _send_control_command(self, device, requested_state, cmd_id):
+        action = requested_state.upper()
+        expected = f"ACK,{device.upper()},{action},{cmd_id}"
+        return self._transact(
+            f"CMD,{device.upper()},{action},{cmd_id}",
+            expected,
+            retries=CONTROL_ACK_RETRIES,
+            timeout=CONTROL_ACK_TIMEOUT,
+        )
 
     @staticmethod
     def _valid_uuid(value):
