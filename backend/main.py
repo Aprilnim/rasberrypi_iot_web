@@ -89,9 +89,12 @@ AUTH_COOKIE_NAME = "control_token"
 CSRF_COOKIE_NAME = "csrf_token"
 AUTH_COOKIE_PATH = "/api"
 CSRF_COOKIE_PATH = "/"
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").strip().lower() not in ("0", "false", "no", "off")
 CSRF_SIGNING_SECRET = os.environ.get("CSRF_SIGNING_SECRET") or "yl40iot-csrf-v1"
 if not os.environ.get("CSRF_SIGNING_SECRET"):
     print("[Security] WARNING: CSRF_SIGNING_SECRET is not set; using development default")
+if not COOKIE_SECURE:
+    print("[Security] WARNING: COOKIE_SECURE is disabled; use only on trusted offline LAN")
 
 # 登录失败限流只放内存里：当前项目是单后端容器，简单可靠，也不需要改数据库。
 LOGIN_RATE_WINDOW_SECONDS = 60
@@ -808,7 +811,7 @@ def login(data: LoginRequest, request: Request, response: Response):
         value=token,
         max_age=AUTH_TOKEN_TTL_SECONDS,
         httponly=True,
-        secure=True,
+        secure=COOKIE_SECURE,
         samesite="lax",
         path=AUTH_COOKIE_PATH,
     )
@@ -817,7 +820,7 @@ def login(data: LoginRequest, request: Request, response: Response):
         value=make_csrf_token(token_hash),
         max_age=AUTH_TOKEN_TTL_SECONDS,
         httponly=False,
-        secure=True,
+        secure=COOKIE_SECURE,
         samesite="lax",
         path=CSRF_COOKIE_PATH,
     )
@@ -853,14 +856,14 @@ def logout(
     response.delete_cookie(
         key=AUTH_COOKIE_NAME,
         path=AUTH_COOKIE_PATH,
-        secure=True,
+        secure=COOKIE_SECURE,
         httponly=True,
         samesite="lax",
     )
     response.delete_cookie(
         key=CSRF_COOKIE_NAME,
         path=CSRF_COOKIE_PATH,
-        secure=True,
+        secure=COOKIE_SECURE,
         httponly=False,
         samesite="lax",
     )

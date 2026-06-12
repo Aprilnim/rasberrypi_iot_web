@@ -1012,15 +1012,26 @@ async function updateSensor() {
 // ------------------------------------------------------------
 function updateLedVisual(isOn) {
     lastLedOn = Boolean(isOn);
+    els.ledStatus.innerText = isOn ? t("on") : t("off");
+    setLedVisualClasses(isOn);
+}
+
+function setLedVisualClasses(isOn) {
     if (isOn) {
-        els.ledStatus.innerText = t("on");
         els.ledBulb.classList.add("on");
         els.ledGlow.classList.add("on");
     } else {
-        els.ledStatus.innerText = t("off");
         els.ledBulb.classList.remove("on");
         els.ledGlow.classList.remove("on");
     }
+}
+
+function updateLedVisualAfterSwitch(isOn) {
+    lastLedOn = Boolean(isOn);
+    els.ledStatus.innerText = isOn ? t("on") : t("off");
+    window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => setLedVisualClasses(isOn));
+    });
 }
 
 function pulseSyncedSwitch(type) {
@@ -1060,9 +1071,11 @@ function applyLedData(data) {
     if (els.ledSwitch.checked !== nextOn) {
         els.ledSwitch.checked = nextOn;
     }
-    updateLedVisual(nextOn);
     if (changed) {
         pulseSyncedSwitch("led");
+        updateLedVisualAfterSwitch(nextOn);
+    } else {
+        updateLedVisual(nextOn);
     }
 }
 
@@ -1160,15 +1173,26 @@ async function toggleLed() {
 // ------------------------------------------------------------
 function updateFanVisual(isOn) {
     lastFanOn = Boolean(isOn);
+    els.fanStatus.innerText = isOn ? t("on") : t("off");
+    setFanVisualClasses(isOn);
+}
+
+function setFanVisualClasses(isOn) {
     if (isOn) {
-        els.fanStatus.innerText = t("on");
         els.fanBulb.classList.add("on");
         els.fanGlow.classList.add("on");
     } else {
-        els.fanStatus.innerText = t("off");
         els.fanBulb.classList.remove("on");
         els.fanGlow.classList.remove("on");
     }
+}
+
+function updateFanVisualAfterSwitch(isOn) {
+    lastFanOn = Boolean(isOn);
+    els.fanStatus.innerText = isOn ? t("on") : t("off");
+    window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => setFanVisualClasses(isOn));
+    });
 }
 
 function applyFanData(data) {
@@ -1189,9 +1213,11 @@ function applyFanData(data) {
     if (els.fanSwitch.checked !== nextOn) {
         els.fanSwitch.checked = nextOn;
     }
-    updateFanVisual(nextOn);
     if (changed) {
         pulseSyncedSwitch("fan");
+        updateFanVisualAfterSwitch(nextOn);
+    } else {
+        updateFanVisual(nextOn);
     }
 }
 
