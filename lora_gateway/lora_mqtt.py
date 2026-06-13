@@ -32,9 +32,11 @@ MQTT_USERNAME = os.environ.get("MQTT_GATEWAY_USERNAME", "lora-gateway")
 MQTT_PASSWORD = os.environ.get("MQTT_GATEWAY_PASSWORD", "")
 MQTT_CLIENT_ID = os.environ.get("MQTT_GATEWAY_CLIENT_ID", "lora-a")
 START_TIME = time.time()
-CONTROL_ACK_RETRIES = int(os.environ.get("LORA_CONTROL_ACK_RETRIES", "5"))
-CONTROL_ACK_TIMEOUT = float(os.environ.get("LORA_CONTROL_ACK_TIMEOUT", "1.8"))
+CONTROL_ACK_RETRIES = int(os.environ.get("LORA_CONTROL_ACK_RETRIES", "3"))
+CONTROL_ACK_TIMEOUT = float(os.environ.get("LORA_CONTROL_ACK_TIMEOUT", "1.2"))
 CONTROL_SECOND_CHANCE_DELAY = float(os.environ.get("LORA_CONTROL_SECOND_CHANCE_DELAY", "0.15"))
+CONTROL_STATE_RETRIES = int(os.environ.get("LORA_CONTROL_STATE_RETRIES", "2"))
+CONTROL_STATE_TIMEOUT = float(os.environ.get("LORA_CONTROL_STATE_TIMEOUT", "0.8"))
 HEARTBEAT_INTERVAL = float(os.environ.get("LORA_GATEWAY_HEARTBEAT_INTERVAL", "3.0"))
 COMMAND_QUIET_SECONDS = float(os.environ.get("LORA_COMMAND_QUIET_SECONDS", "2.0"))
 PI_B_OFFLINE_GRACE = 12.0
@@ -263,8 +265,10 @@ class LoRaMQTTGateway:
             self._remember_and_publish(device, result)
             return
 
+        print(f"[LoRa] Control start: {device} requested={requested_state} cmd_id={cmd_id}", flush=True)
         response = self._send_control_command(device, requested_state, cmd_id)
         if response:
+            print(f"[LoRa] Control ACK ok: {device} requested={requested_state} cmd_id={cmd_id}", flush=True)
             result = self._make_result(cmd_id, device, requested_state, "success", requested_state, None)
             self._publish_state(device, requested_state, cmd_id)
             self._publish_pi_b_heartbeat()
@@ -278,15 +282,27 @@ class LoRaMQTTGateway:
                 time.sleep(CONTROL_SECOND_CHANCE_DELAY)
                 response = self._send_control_command(device, requested_state, cmd_id)
                 if response:
+                    print(
+                        f"[LoRa] Control second chance ACK ok: {device} requested={requested_state} cmd_id={cmd_id}",
+                        flush=True,
+                    )
                     actual_state = requested_state
                 else:
                     actual_state = self._confirm_state_after_ack_timeout(device, requested_state)
 
             if actual_state == requested_state:
+                print(
+                    f"[LoRa] Control success by state confirm: {device} requested={requested_state} cmd_id={cmd_id}",
+                    flush=True,
+                )
                 result = self._make_result(cmd_id, device, requested_state, "success", actual_state, None)
                 self._publish_state(device, actual_state, cmd_id)
                 self._publish_pi_b_heartbeat()
             else:
+                print(
+                    f"[LoRa] Control failed after retry: {device} requested={requested_state} actual={actual_state} cmd_id={cmd_id}",
+                    flush=True,
+                )
                 result = self._make_result(
                     cmd_id,
                     device,
@@ -465,7 +481,12 @@ class LoRaMQTTGateway:
         return states.get(device)
 
     def _confirm_state_after_ack_timeout(self, device, requested_state):
-        response = self._transact("QUERY,STATE", "STATE", retries=2, timeout=1.0)
+        response = self._transact(
+            "QUERY,STATE",
+            "STATE",
+            retries=CONTROL_STATE_RETRIES,
+            timeout=CONTROL_STATE_TIMEOUT,
+        )
         if response and response is not LOCK_BUSY:
             actual_state = self._state_from_payload(response, device)
             if actual_state:
@@ -477,13 +498,15 @@ class LoRaMQTTGateway:
         return None
 
     def _transact(self, payload, expected, retries=1, timeout=2.0, blocking=True):
-        message = self.build_message(payload)
         lock_acquired = self._transaction_lock.acquire(blocking=blocking)
         if not lock_acquired:
             return LOCK_BUSY
         try:
             self._drain_response_queue()
             for _attempt in range(retries):
+                # 事务锁内生成安全帧，确保 LoRa seq 与实际发送顺序一致。
+                # 同一 cmd_id 的重复控制命令由 Pi B 缓存 ACK，不会重复执行 GPIO。
+                message = self.build_message(payload)
                 self.ser.write((message + "\n").encode("utf-8"))
                 self.ser.flush()
                 deadline = time.time() + timeout
@@ -534,7 +557,11 @@ class LoRaMQTTGateway:
                 self._publish_b_availability(False)
 
             now = time.time()
-            if self._b_online and now - self._last_state_query_at >= STATE_QUERY_INTERVAL:
+            if (
+                self._b_online
+                and not self._has_pending_command()
+                and now - self._last_state_query_at >= STATE_QUERY_INTERVAL
+            ):
                 self._last_state_query_at = now
                 self._transact("QUERY,STATE", "STATE", retries=1, timeout=1.2, blocking=False)
 
