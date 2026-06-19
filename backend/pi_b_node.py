@@ -96,14 +96,15 @@ def verify_message(raw):
 
 
 def fan_on():
-    """低电平触发继电器，打开风扇。"""
+    """高电平触发继电器，打开风扇。"""
     GPIO.setup(FAN_PIN, GPIO.OUT)
-    GPIO.output(FAN_PIN, GPIO.LOW)
+    GPIO.output(FAN_PIN, GPIO.HIGH)
 
 
 def fan_off():
-    """释放 GPIO24 为输入悬空，关闭风扇。"""
-    GPIO.setup(FAN_PIN, GPIO.IN)
+    """低电平触发继电器，关闭风扇。"""
+    GPIO.setup(FAN_PIN, GPIO.OUT)
+    GPIO.output(FAN_PIN, GPIO.LOW)
 
 
 def send_payload(ser, payload):

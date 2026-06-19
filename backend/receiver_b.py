@@ -112,24 +112,16 @@ def verify_crc(message: str) -> Tuple[bool, str]:
 
 
 def fan_on():
-    """开风扇：设为输出 LOW
-
-    风扇继电器 IN 接 GPIO24，模块需要 5V 高电平条件，
-    但树莓派 GPIO 只能输出 3.3V；实测用 GPIO24 拉低可触发风扇打开。
-    """
+    """高电平触发继电器，打开风扇。"""
     GPIO.setup(FAN_PIN, GPIO.OUT)
-    GPIO.output(FAN_PIN, GPIO.LOW)
+    GPIO.output(FAN_PIN, GPIO.HIGH)
 
 
 def fan_off():
-    """关风扇：释放引脚为输入（悬空）
+    """低电平触发继电器，关闭风扇。"""
+    GPIO.setup(FAN_PIN, GPIO.OUT)
+    GPIO.output(FAN_PIN, GPIO.LOW)
 
-    对这个继电器模块，GPIO HIGH 不是可靠的 5V 关闭信号，
-    GPIO LOW 又会触发风扇打开；输入悬空状态用于停止风扇。
-    """
-    GPIO.setup(FAN_PIN, GPIO.IN)
-    time.sleep(0.5) # 确保继电器有时间响应
-    
 
 def main():
     global last_a_response
@@ -143,7 +135,7 @@ def main():
     GPIO.output(M0, GPIO.LOW)
     GPIO.output(M1, GPIO.LOW)
     GPIO.output(LED_PIN, GPIO.LOW)
-    # 风扇默认关闭（输入模式 = 悬空 = 风扇停）
+    # 风扇默认关闭（高电平触发继电器：LOW = 关闭）
     fan_off()
     time.sleep(1)
     print("[Receiver B] GPIO initialized", flush=True)
